@@ -1,71 +1,99 @@
-# Blacksea
+# 🌊 Blacksea
 
-Un compositor Wayland escrito en Zig, construido sobre wlroots.
+> A Wayland compositor written from scratch in Zig. No libdrm, no libwayland, no libinput — pure kernel syscalls.
 
 ```
-          ~~  Blacksea  ~~
-   un compositor, profundo y oscuro
+  ~~  Blacksea  ~~
+  compositor wayland desde cero
+  escrito en Zig 0.16
 ```
 
-## Dependencias
+## ¿Qué es Blacksea?
+
+Blacksea es un compositor Wayland construido completamente desde cero, sin depender de ninguna librería de abstracción. Habla directamente con el kernel Linux vía ioctls DRM/KMS para controlar el display, lee eventos de input desde `/dev/input/` sin libinput, y tiene su propio sistema de layout con dos modos: **scrolling** (estilo niri) y **tiling** (estilo dwm), con cambio dinámico entre ellos.
+
+## Características
+
+- **Zero dependencias externas** — solo el kernel Linux y libc
+- **DRM/KMS directo** — ioctls a mano, dumb buffers, double buffering, page flip
+- **evdev directo** — lee `/dev/input/eventX` sin libinput
+- **Software renderer** — píxeles ARGB8888 escritos directamente al framebuffer
+- **Dual layout** — modo scrolling (columnas) y tiling (mosaico), cambiable con `Super+Space`
+- **Escrito en Zig 0.16** — compilado a nativo, sin GC, sin runtime
+
+## Requisitos
+
+- Linux con DRM/KMS (cualquier GPU moderna)
+- Zig 0.16.0
+- Usuario en el grupo `video` e `input`
+- Correr desde TTY (no dentro de otro compositor)
 
 ```bash
-# Arch Linux
-pacman -S zig wlroots wayland wayland-protocols libxkbcommon libinput
-
-# Ubuntu/Debian (24.04+)
-apt install zig libwlroots-dev libwayland-dev libxkbcommon-dev libinput-dev \
-            wayland-protocols
-
-# Fedora
-dnf install zig wlroots-devel wayland-devel libxkbcommon-devel libinput-devel
+sudo usermod -aG video,input $USER
 ```
-
-> Requiere **wlroots 0.18** y **Zig 0.14**.
 
 ## Build
 
 ```bash
-zig build          # compila
-zig build run      # compila y lanza
-zig build test     # corre los tests unitarios
-```
-
-## Desarrollo anidado (sin TTY)
-
-Blacksea detecta automáticamente el entorno via `wlr_backend_autocreate`.
-Si tenés `WAYLAND_DISPLAY` exportado (estás en GNOME/KDE/etc.), corre
-como cliente Wayland dentro de tu sesión actual — perfecto para desarrollo.
-
-```bash
-# En tu sesión de escritorio normal:
+git clone https://github.com/johandavid77/blacksea.git
+cd blacksea
 zig build run
-# → abre una ventana con el compositor anidado
 ```
+
+## Controles
+
+| Atajo | Acción |
+|-------|--------|
+| `Super+Space` | Cambiar modo de layout (scrolling ↔ tiling) |
+| `Super+Q` | Salir |
 
 ## Estructura del proyecto
 
 ```
 blacksea/
-├── build.zig          — sistema de build, linkeo de C libs
+├── build.zig        — sistema de build, zero dependencias externas
 └── src/
-    ├── main.zig       — entry point, listeners globales, event loop
-    ├── server.zig     — estado global: display, backend, renderer, scene
-    ├── output.zig     — monitores (outputs): configuración y frame rendering
-    ├── view.zig       — ventanas (xdg_toplevel): posición, foco, hit-test
-    └── c.zig          — @cImport centralizado de wlroots/wayland/xkbcommon
+    ├── main.zig     — entry point, event loop, render loop
+    ├── drm.zig      — DRM/KMS: ioctls, dumb buffers, page flip, double buffering
+    └── evdev.zig    — input: lectura directa de /dev/input/eventX
+```
+
+## Arquitectura
+
+```
+┌─────────────────────────────────────┐
+│           main.zig                  │
+│   event loop · render · keybinds    │
+└──────────┬──────────────┬───────────┘
+           │              │
+    ┌──────▼──────┐  ┌────▼──────┐
+    │   drm.zig   │  │ evdev.zig │
+    │  DRM/KMS    │  │  /dev/    │
+    │  ioctls     │  │  input/   │
+    └──────┬──────┘  └───────────┘
+           │
+    ┌──────▼──────────────────────┐
+    │      Kernel Linux           │
+    │  DRM/KMS · evdev · mmap     │
+    └─────────────────────────────┘
 ```
 
 ## Roadmap
 
-- [x] **Fase 1** — Andamio: compositor arranca, detecta outputs, event loop
-- [ ] **Fase 2** — Superficies: clientes se conectan, ventanas se renderizan
-- [ ] **Fase 3** — Input: teclado, mouse, foco de ventanas, keybindings
-- [ ] **Fase 4** — Extras: XWayland, IPC socket, layer-shell, decoraciones
+- [x] **Fase 1** — DRM/KMS, evdev, software render, dual layout mode
+- [ ] **Fase 2** — Protocolo Wayland desde cero (wire format, Unix socket)
+- [ ] **Fase 3** — wl_compositor, wl_surface, wl_shm — primeros clientes
+- [ ] **Fase 4** — xdg_shell, ventanas reales, foco de teclado
+- [ ] **Fase 5** — Layout engine: scrolling columns + tiling
+- [ ] **Fase 6** — IPC socket, config file, decoraciones
 
-## Referencia
+## Inspiración
 
-- [tinywl](https://gitlab.freedesktop.org/wlroots/wlroots/-/tree/master/tinywl) — compositor mínimo de ejemplo en C (nuestro norte)
-- [wlroots docs](https://gitlab.freedesktop.org/wlroots/wlroots)
-- [Wayland book](https://wayland-book.com)
-- [Zig C interop](https://ziglang.org/documentation/master/#C)
+- [niri](https://github.com/YaLTeR/niri) — scrolling columns layout
+- [dwm](https://dwm.suckless.org/) — tiling simplicity
+- [tinywl](https://gitlab.freedesktop.org/wlroots/wlroots/-/tree/master/tinywl) — minimal compositor reference
+- [Wayland Book](https://wayland-book.com) — protocolo Wayland
+
+## Autor
+
+**johandavid77** — construido con paciencia, ioctls y mucho debug desde Arch Linux.
