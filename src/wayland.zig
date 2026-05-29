@@ -302,3 +302,18 @@ pub const Server = struct {
         _ = linux.unlink("/run/user/1000/wayland-0");
     }
 };
+
+// ─── Integración con surface manager ─────────────────────────────────────────
+
+pub const surface_mod = @import("surface.zig");
+
+/// Responder a wl_shm bind: anunciar formato XRGB8888
+pub fn sendShmFormats(client: *Client, shm_id: u32) void {
+    // wl_shm::format event (opcode 0)
+    var buf = MsgBuf{};
+    buf.uint(surface_mod.WL_SHM_FORMAT_ARGB8888);
+    client.sendEvent(shm_id, 0, buf.slice());
+    var buf2 = MsgBuf{};
+    buf2.uint(surface_mod.WL_SHM_FORMAT_XRGB8888);
+    client.sendEvent(shm_id, 0, buf2.slice());
+}
