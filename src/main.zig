@@ -1,6 +1,7 @@
 const std = @import("std");
 const linux = std.os.linux;
 const wayland = @import("wayland.zig");
+const surface_mod = @import("surface.zig");
 const drm = @import("drm.zig");
 const evdev = @import("evdev.zig");
 
@@ -106,6 +107,7 @@ pub fn main() !void {
 
         if (dirty) {
             drawFrame(output, mode, @intCast(cursor_x), @intCast(cursor_y));
+            if (wl_server) |*s| blitSurfaces(output, &s.surfaces);
             try output.pageFlip(device.fd);
             dirty = false;
         }
@@ -124,5 +126,13 @@ fn drawFrame(output: *drm.Output, mode: LayoutMode, cx: u32, cy: u32) void {
     if (cy > 32) {
         fb.fillRect(if (cx>=8) cx-8 else 0, cy, 16, 1, Colors.white);
         fb.fillRect(cx, if (cy>=8) cy-8 else 0, 1, 16, Colors.white);
+    }
+}
+
+fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
+    const fb = output.drawBuffer();
+    for (&surfaces.surfaces) |*surf| {
+        if (surf.id == 0 or !surf.mapped) continue;
+        surface_mod.SurfaceManager.blitSurface(surf, fb.data, output.width, output.height, fb.pitch);
     }
 }

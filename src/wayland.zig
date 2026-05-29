@@ -1,22 +1,20 @@
 /// wayland.zig — Protocolo Wayland desde cero
-///
-/// El servidor abre un Unix socket. Los clientes conectan.
-/// Cada mensaje: [object_id: u32][size: u16][opcode: u16][payload...]
-///
-/// Objetos core que implementamos:
-///   ID 1: wl_display    — punto de entrada, sync, error
-///   ID 2: wl_registry   — lista de globals disponibles
-///   wl_compositor       — crea wl_surface
-///   wl_shm              — memoria compartida para buffers
-///   xdg_wm_base         — ventanas de escritorio
-
 const std = @import("std");
 const linux = std.os.linux;
-const posix = std.posix;
+const surface_mod = @import("surface.zig");
+
+pub const SurfaceManager = surface_mod.SurfaceManager;
 
 // ─── Wire format ──────────────────────────────────────────────────────────────
 
-/// Buffer simple para construir mensajes Wayland sin heap
+pub fn readUint(data: []const u8, offset: usize) u32 {
+    return std.mem.readInt(u32, data[offset..][0..4], .little);
+}
+
+pub fn readInt(data: []const u8, offset: usize) i32 {
+    return std.mem.readInt(i32, data[offset..][0..4], .little);
+}
+
 pub const MsgBuf = struct {
     data: [512]u8 = undefined,
     len : usize   = 0,
@@ -45,59 +43,34 @@ pub const MsgBuf = struct {
     }
 };
 
-pub fn readUint(data: []const u8, offset: usize) u32 {
-    return std.mem.readInt(u32, data[offset..][0..4], .little);
-}
-
-pub fn readInt(data: []const u8, offset: usize) i32 {
-    return std.mem.readInt(i32, data[offset..][0..4], .little);
-}
-
-// ─── Mensaje ──────────────────────────────────────────────────────────────────
+// ─── Header ───────────────────────────────────────────────────────────────────
 
 pub const Header = extern struct {
-    object_id: u32,
-    size_and_opcode: u32,  // size en bits 31..16, opcode en bits 15..0
-
-    pub fn size(self: Header) u16 {
-        return @intCast(self.size_and_opcode >> 16);
-    }
-    pub fn opcode(self: Header) u16 {
-        return @intCast(self.size_and_opcode & 0xFFFF);
-    }
-    pub fn encode(object_id: u32, op: u16, payload_len: u16) Header {
-        const total: u32 = 8 + payload_len;
-        return .{
-            .object_id = object_id,
-            .size_and_opcode = (@as(u32, total) << 16) | op,
-        };
-    }
+    object_id      : u32,
+    size_and_opcode: u32,
+    pub fn size(self: Header) u16   { return @intCast(self.size_and_opcode >> 16); }
+    pub fn opcode(self: Header) u16 { return @intCast(self.size_and_opcode & 0xFFFF); }
 };
 
 // ─── Cliente ──────────────────────────────────────────────────────────────────
 
 pub const Client = struct {
-    fd         : i32,
-    recv_buf   : [4096]u8 = undefined,
-    recv_len   : usize = 0,
-    next_id    : u32 = 0xFF000000,  // IDs del servidor empiezan acá
-    allocator  : std.mem.Allocator,
+    fd          : i32,
+    recv_buf    : [4096]u8 = undefined,
+    recv_len    : usize = 0,
+    next_id     : u32 = 0xFF000000,
 
-    // Estado de globals asignados
-    compositor_id : u32 = 0,
-    shm_id        : u32 = 0,
-    xdg_id        : u32 = 0,
+    // IDs de objetos bindeados
+    compositor_id: u32 = 0,
+    shm_id       : u32 = 0,
+    xdg_id       : u32 = 0,
+    seat_id      : u32 = 0,
 
-    pub fn init(fd: i32, allocator: std.mem.Allocator) Client {
-        return .{ .fd = fd, .allocator = allocator };
-    }
+    pub fn init(fd: i32) Client { return .{ .fd = fd }; }
 
     pub fn recv(self: *Client) ![]u8 {
-        const n = linux.read(
-            @intCast(self.fd),
-            self.recv_buf[self.recv_len..].ptr,
-            self.recv_buf.len - self.recv_len,
-        );
+        const n = linux.read(@intCast(self.fd), self.recv_buf[self.recv_len..].ptr,
+            self.recv_buf.len - self.recv_len);
         const bytes: i64 = @bitCast(n);
         if (bytes <= 0) return error.Disconnected;
         self.recv_len += @intCast(bytes);
@@ -105,9 +78,8 @@ pub const Client = struct {
     }
 
     pub fn consume(self: *Client, n: usize) void {
-        if (n >= self.recv_len) {
-            self.recv_len = 0;
-        } else {
+        if (n >= self.recv_len) { self.recv_len = 0; }
+        else {
             std.mem.copyForwards(u8, &self.recv_buf, self.recv_buf[n..self.recv_len]);
             self.recv_len -= n;
         }
@@ -118,10 +90,10 @@ pub const Client = struct {
     }
 
     pub fn sendEvent(self: *Client, object_id: u32, opcode: u16, payload: []const u8) void {
-        const hdr = Header.encode(object_id, opcode, @intCast(payload.len));
+        const total: u32 = @intCast(8 + payload.len);
         var h: [8]u8 = undefined;
-        std.mem.writeInt(u32, h[0..4], hdr.object_id, .little);
-        std.mem.writeInt(u32, h[4..8], hdr.size_and_opcode, .little);
+        std.mem.writeInt(u32, h[0..4], object_id, .little);
+        std.mem.writeInt(u32, h[4..8], (total << 16) | opcode, .little);
         self.send(&h);
         if (payload.len > 0) self.send(payload);
     }
@@ -133,9 +105,8 @@ pub const Client = struct {
     }
 };
 
-// ─── Globals Wayland ──────────────────────────────────────────────────────────
+// ─── Globals ──────────────────────────────────────────────────────────────────
 
-// Nombres e interfaces que anunciamos en el registry
 pub const globals = [_]struct { name: []const u8, version: u32 }{
     .{ .name = "wl_compositor", .version = 4 },
     .{ .name = "wl_shm",        .version = 1 },
@@ -144,157 +115,177 @@ pub const globals = [_]struct { name: []const u8, version: u32 }{
     .{ .name = "wl_output",     .version = 4 },
 };
 
-// ─── Handlers de requests ─────────────────────────────────────────────────────
-
-/// wl_display (object_id = 1)
-/// opcodes: 0=sync, 1=get_registry
-pub fn handleDisplay(client: *Client, opcode: u16, payload: []const u8) !void {
-    switch (opcode) {
-        0 => { // sync — responder con wl_callback.done
-            const callback_id = readUint(payload, 0);
-            // wl_callback::done (opcode 0), serial = 0
-            var buf = MsgBuf{};
-            buf.uint(0);  // serial
-            client.sendEvent(callback_id, 0, buf.slice());
-            var del = MsgBuf{};
-            del.uint(callback_id);
-            client.sendEvent(1, 1, del.slice());
-        },
-        1 => { // get_registry
-            const registry_id = readUint(payload, 0);
-            // Anunciar todos los globals
-            for (globals, 0..) |g, i| {
-                var buf = MsgBuf{};
-                buf.uint(@intCast(i + 1));
-                buf.string(g.name);
-                buf.uint(g.version);
-                client.sendEvent(registry_id, 0, buf.slice());
-            }
-            std.log.info("wayland: registry enviado a cliente fd={}", .{client.fd});
-        },
-        else => std.log.warn("wayland: wl_display opcode desconocido: {}", .{opcode}),
-    }
-}
-
-/// wl_registry — bind de globals
-/// opcode 0 = bind(name, interface, version, new_id)
-pub fn handleRegistry(client: *Client, opcode: u16, payload: []const u8) void {
-    if (opcode != 0) return;
-    const name = readUint(payload, 0);
-    // interface string, version, new_id siguen
-    // name 1=wl_compositor, 2=wl_shm, 3=xdg_wm_base, 4=wl_seat, 5=wl_output
-    switch (name) {
-        1 => { client.compositor_id = readUint(payload, payload.len - 4); std.log.info("wayland: wl_compositor bound id={}", .{client.compositor_id}); },
-        2 => { client.shm_id        = readUint(payload, payload.len - 4); std.log.info("wayland: wl_shm bound id={}", .{client.shm_id}); },
-        3 => { client.xdg_id        = readUint(payload, payload.len - 4); std.log.info("wayland: xdg_wm_base bound id={}", .{client.xdg_id}); },
-        else => {},
-    }
-}
-
 // ─── Servidor ─────────────────────────────────────────────────────────────────
 
 pub const Server = struct {
-    socket_fd : i32,
-    clients   : [16]?Client = [_]?Client{null} ** 16,
-    allocator : std.mem.Allocator,
+    socket_fd: i32,
+    clients  : [16]?Client = [_]?Client{null} ** 16,
+    surfaces : SurfaceManager,
+    allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) !Server {
-        // Crear directorio del socket si no existe
         _ = linux.mkdir("/run/user/1000", 0o755);
-
-        // Eliminar socket anterior si existe
-        const socket_path = "/run/user/1000/wayland-0";
         _ = linux.unlink("/run/user/1000/wayland-0");
 
-        // Crear Unix domain socket
         const sock_rc = linux.socket(
             linux.AF.UNIX,
-            linux.SOCK.STREAM | linux.SOCK.NONBLOCK | linux.SOCK.CLOEXEC,
-            0,
-        );
+            linux.SOCK.STREAM | linux.SOCK.NONBLOCK | linux.SOCK.CLOEXEC, 0);
         const sock: i32 = @bitCast(@as(u32, @truncate(sock_rc)));
         if (sock < 0) return error.SocketFailed;
 
-        // Bind al path
         var addr = std.posix.sockaddr.un{
             .family = linux.AF.UNIX,
             .path   = std.mem.zeroes([108]u8),
         };
-        @memcpy(addr.path[0..socket_path.len], socket_path);
+        const path = "/run/user/1000/wayland-0";
+        @memcpy(addr.path[0..path.len], path);
 
-        const bind_rc = linux.bind(
-            @intCast(sock),
-            @ptrCast(&addr),
-            @sizeOf(@TypeOf(addr)),
-        );
-        if (@as(i32, @bitCast(@as(u32, @truncate(bind_rc)))) < 0)
+        if (@as(i32,@bitCast(@as(u32,@truncate(linux.bind(@intCast(sock),@ptrCast(&addr),@sizeOf(@TypeOf(addr))))))) < 0)
             return error.BindFailed;
-
-        const listen_rc = linux.listen(@intCast(sock), 16);
-        if (@as(i32, @bitCast(@as(u32, @truncate(listen_rc)))) < 0)
+        if (@as(i32,@bitCast(@as(u32,@truncate(linux.listen(@intCast(sock), 16))))) < 0)
             return error.ListenFailed;
 
-        std.log.info("wayland: socket en {s}", .{socket_path});
-        return Server{ .socket_fd = sock, .allocator = allocator };
+        std.log.info("wayland: socket en {s}", .{path});
+        return Server{
+            .socket_fd = sock,
+            .surfaces  = SurfaceManager.init(),
+            .allocator = allocator,
+        };
     }
 
     pub fn acceptClient(self: *Server) void {
-        const rc = linux.accept4(
-            @intCast(self.socket_fd), null, null,
-            linux.SOCK.NONBLOCK | linux.SOCK.CLOEXEC,
-        );
+        const rc = linux.accept4(@intCast(self.socket_fd), null, null,
+            linux.SOCK.NONBLOCK | linux.SOCK.CLOEXEC);
         const fd: i32 = @bitCast(@as(u32, @truncate(rc)));
         if (fd < 0) return;
-
         for (&self.clients) |*slot| {
             if (slot.* == null) {
-                slot.* = Client.init(fd, self.allocator);
+                slot.* = Client.init(fd);
                 std.log.info("wayland: cliente conectado fd={}", .{fd});
                 return;
             }
         }
         _ = linux.close(@intCast(fd));
-        std.log.warn("wayland: demasiados clientes", .{});
     }
 
     pub fn pollClients(self: *Server) void {
         for (&self.clients) |*slot| {
             var client = &(slot.* orelse continue);
             const data = client.recv() catch {
-                std.log.info("wayland: cliente fd={} desconectado", .{client.fd});
                 _ = linux.close(@intCast(client.fd));
                 slot.* = null;
                 continue;
             };
-
             var offset: usize = 0;
             while (offset + 8 <= data.len) {
                 const object_id = readUint(data, offset);
                 const size_op   = readUint(data, offset + 4);
                 const msg_size  : u16 = @intCast(size_op >> 16);
                 const opcode    : u16 = @intCast(size_op & 0xFFFF);
-
                 if (offset + msg_size > data.len) break;
                 const payload = data[offset + 8 .. offset + msg_size];
-
-                dispatch(client, object_id, opcode, payload) catch |err| {
-                    std.log.err("wayland: dispatch error: {}", .{err});
-                };
+                self.dispatch(client, object_id, opcode, payload);
                 offset += msg_size;
             }
             client.consume(offset);
         }
     }
 
-    fn dispatch(client: *Client, object_id: u32, opcode: u16, payload: []const u8) !void {
-        std.log.debug("wayland: obj={} op={} len={}", .{object_id, opcode, payload.len});
-
+    fn dispatch(self: *Server, client: *Client, object_id: u32, opcode: u16, payload: []const u8) void {
+        // wl_display (id=1)
         if (object_id == 1) {
-            try handleDisplay(client, opcode, payload);
-        } else {
-            // Por ahora: registry y otros globales
-            handleRegistry(client, opcode, payload);
+            switch (opcode) {
+                0 => { // sync
+                    const cb = readUint(payload, 0);
+                    var b = MsgBuf{}; b.uint(0);
+                    client.sendEvent(cb, 0, b.slice());
+                    var d = MsgBuf{}; d.uint(cb);
+                    client.sendEvent(1, 1, d.slice());
+                },
+                1 => { // get_registry
+                    const reg_id = readUint(payload, 0);
+                    for (globals, 0..) |g, i| {
+                        var b = MsgBuf{};
+                        b.uint(@intCast(i + 1));
+                        b.string(g.name);
+                        b.uint(g.version);
+                        client.sendEvent(reg_id, 0, b.slice());
+                    }
+                },
+                else => {},
+            }
+            return;
         }
+
+        // wl_registry bind (cualquier objeto que no reconocemos aún)
+        // Si el cliente bindea globals, guardamos los IDs
+        if (opcode == 0 and payload.len >= 8) {
+            const name = readUint(payload, 0);
+            const new_id = readUint(payload, payload.len - 4);
+            switch (name) {
+                1 => { client.compositor_id = new_id; std.log.info("wl_compositor id={}", .{new_id}); },
+                2 => { // wl_shm
+                    client.shm_id = new_id;
+                    std.log.info("wl_shm id={}", .{new_id});
+                    // Anunciar formatos soportados
+                    var b = MsgBuf{}; b.uint(surface_mod.WL_SHM_FORMAT_ARGB8888);
+                    client.sendEvent(new_id, 0, b.slice());
+                    var b2 = MsgBuf{}; b2.uint(surface_mod.WL_SHM_FORMAT_XRGB8888);
+                    client.sendEvent(new_id, 0, b2.slice());
+                },
+                3 => { // xdg_wm_base
+                    client.xdg_id = new_id;
+                    std.log.info("xdg_wm_base id={}", .{new_id});
+                },
+                4 => { client.seat_id = new_id; },
+                else => {},
+            }
+            return;
+        }
+
+        // wl_compositor.create_surface (opcode 0)
+        if (object_id == client.compositor_id and opcode == 0) {
+            const new_id = readUint(payload, 0);
+            _ = self.surfaces.createSurface(new_id, client.fd);
+            return;
+        }
+
+        // xdg_wm_base.pong (opcode 3) — respuesta al ping
+        if (object_id == client.xdg_id and opcode == 3) return;
+
+        // wl_shm.create_pool (opcode 0): fd via ancdata, size
+        // Por ahora manejamos en pollClients con recvmsg
+
+        // wl_surface requests
+        if (self.surfaces.getSurface(object_id)) |surf| {
+            switch (opcode) {
+                0 => { // destroy
+                    self.surfaces.destroySurface(object_id);
+                },
+                1 => { // attach(buffer_id, x, y)
+                    if (payload.len >= 12) {
+                        const buf_id = readUint(payload, 0);
+                        surf.x = readInt(payload, 4);
+                        surf.y = readInt(payload, 8);
+                        surf.pending_buf = self.surfaces.getBuffer(buf_id);
+                    }
+                },
+                6 => { // commit
+                    if (surf.pending_buf) |pb| {
+                        surf.buffer = pb;
+                        surf.width  = pb.width;
+                        surf.height = pb.height;
+                        surf.mapped = true;
+                        surf.pending_buf = null;
+                        std.log.info("surface {}: commit {}x{}", .{object_id, pb.width, pb.height});
+                    }
+                },
+                else => {},
+            }
+            return;
+        }
+
+        std.log.debug("wayland: obj={} op={} len={} (no manejado)", .{object_id, opcode, payload.len});
     }
 
     pub fn deinit(self: *Server) void {
@@ -302,18 +293,3 @@ pub const Server = struct {
         _ = linux.unlink("/run/user/1000/wayland-0");
     }
 };
-
-// ─── Integración con surface manager ─────────────────────────────────────────
-
-pub const surface_mod = @import("surface.zig");
-
-/// Responder a wl_shm bind: anunciar formato XRGB8888
-pub fn sendShmFormats(client: *Client, shm_id: u32) void {
-    // wl_shm::format event (opcode 0)
-    var buf = MsgBuf{};
-    buf.uint(surface_mod.WL_SHM_FORMAT_ARGB8888);
-    client.sendEvent(shm_id, 0, buf.slice());
-    var buf2 = MsgBuf{};
-    buf2.uint(surface_mod.WL_SHM_FORMAT_XRGB8888);
-    client.sendEvent(shm_id, 0, buf2.slice());
-}
