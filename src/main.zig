@@ -1,5 +1,6 @@
 const std = @import("std");
 const linux = std.os.linux;
+const wayland = @import("wayland.zig");
 const drm = @import("drm.zig");
 const evdev = @import("evdev.zig");
 
@@ -48,6 +49,16 @@ pub fn main() !void {
     defer input.deinit();
     input.scanDevices() catch |err| bsLog(.warn, "sin input: {}", .{err});
 
+    // Servidor Wayland
+    var wl_server = wayland.Server.init(allocator) catch |err| blk: {
+        bsLog(.warn, "wayland: no se pudo iniciar socket: {}", .{err});
+        break :blk null;
+    };
+    defer if (wl_server) |*s| s.deinit();
+
+    if (wl_server != null) {
+    }
+
     drawFrame(output, .scrolling, output.width / 2, output.height / 2);
     try output.pageFlip(device.fd);
 
@@ -86,6 +97,13 @@ pub fn main() !void {
             } else |_| {}
         }
         if (!running) break;
+
+        // Aceptar y procesar clientes Wayland
+        if (wl_server) |*s| {
+            s.acceptClient();
+            s.pollClients();
+        }
+
         if (dirty) {
             drawFrame(output, mode, @intCast(cursor_x), @intCast(cursor_y));
             try output.pageFlip(device.fd);
