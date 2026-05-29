@@ -71,8 +71,17 @@ pub const Client = struct {
     pub fn recv(self: *Client) ![]u8 {
         const n = linux.read(@intCast(self.fd), self.recv_buf[self.recv_len..].ptr,
             self.recv_buf.len - self.recv_len);
-        const bytes: i64 = @bitCast(n);
-        if (bytes <= 0) return error.Disconnected;
+        const bytes: isize = @bitCast(n);
+        if (bytes < 0) {
+            const err = std.posix.errno(n);
+            if (err == .AGAIN) {
+                // No hay datos disponibles — no es error
+                if (self.recv_len > 0) return self.recv_buf[0..self.recv_len];
+                return error.WouldBlock;
+            }
+            return error.Disconnected;
+        }
+        if (bytes == 0) return error.Disconnected;
         self.recv_len += @intCast(bytes);
         return self.recv_buf[0..self.recv_len];
     }
@@ -94,6 +103,7 @@ pub const Client = struct {
         var h: [8]u8 = undefined;
         std.mem.writeInt(u32, h[0..4], object_id, .little);
         std.mem.writeInt(u32, h[4..8], (total << 16) | opcode, .little);
+        std.log.info("send: obj={} op={} size={}", .{object_id, opcode, total});
         self.send(&h);
         if (payload.len > 0) self.send(payload);
     }
@@ -171,7 +181,8 @@ pub const Server = struct {
     pub fn pollClients(self: *Server) void {
         for (&self.clients) |*slot| {
             var client = &(slot.* orelse continue);
-            const data = client.recv() catch {
+            const data = client.recv() catch |err| {
+                if (err == error.WouldBlock) continue;
                 _ = linux.close(@intCast(client.fd));
                 slot.* = null;
                 continue;
@@ -183,6 +194,8 @@ pub const Server = struct {
                 const msg_size  : u16 = @intCast(size_op >> 16);
                 const opcode    : u16 = @intCast(size_op & 0xFFFF);
                 if (offset + msg_size > data.len) break;
+                if (offset + msg_size > data.len) break;
+                if (msg_size < 8) { offset += @max(msg_size, 1); continue; }
                 const payload = data[offset + 8 .. offset + msg_size];
                 self.dispatch(client, object_id, opcode, payload);
                 offset += msg_size;
@@ -204,6 +217,7 @@ pub const Server = struct {
                 },
                 1 => { // get_registry
                     const reg_id = readUint(payload, 0);
+                    std.log.info("get_registry: reg_id={}", .{reg_id});
                     for (globals, 0..) |g, i| {
                         var b = MsgBuf{};
                         b.uint(@intCast(i + 1));
@@ -285,7 +299,7 @@ pub const Server = struct {
             return;
         }
 
-        std.log.debug("wayland: obj={} op={} len={} (no manejado)", .{object_id, opcode, payload.len});
+        std.log.info("wayland: obj={} op={} len={} (no manejado)", .{object_id, opcode, payload.len});
     }
 
     pub fn deinit(self: *Server) void {
