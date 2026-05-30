@@ -4,6 +4,8 @@ const linux = std.os.linux;
 const surface_mod = @import("surface.zig");
 
 pub const SurfaceManager = surface_mod.SurfaceManager;
+const xdg_mod = @import("xdg_shell.zig");
+pub const XdgManager = xdg_mod.XdgManager;
 
 pub fn readUint(data: []const u8, offset: usize) u32 {
     return std.mem.readInt(u32, data[offset..][0..4], .little);
@@ -43,6 +45,8 @@ pub const Client = struct {
     seat_id      : u32 = 0,
     pool_id      : u32 = 0,
     pool_fd      : i32 = -1,
+    xdg_surface_ids: [8]u32 = std.mem.zeroes([8]u32),
+    xdg_surface_count: usize = 0,
 
     pub fn init(fd: i32) Client { return .{ .fd = fd }; }
 
@@ -83,7 +87,9 @@ pub const Server = struct {
     socket_fd: i32,
     clients  : [16]?Client = [_]?Client{null} ** 16,
     surfaces : SurfaceManager,
+    xdg      : XdgManager,
     allocator: std.mem.Allocator,
+    serial   : u32 = 1,
 
     pub fn init(allocator: std.mem.Allocator) !Server {
         _ = linux.mkdir("/run/user/1000", 0o755);
@@ -107,7 +113,7 @@ pub const Server = struct {
             @intCast(sock), 16))))) < 0) return error.ListenFailed;
 
         std.log.info("wayland: socket en {s}", .{path});
-        return Server{ .socket_fd = sock, .surfaces = SurfaceManager.init(),
+        return Server{ .socket_fd = sock, .surfaces = SurfaceManager.init(), .xdg = XdgManager.init(),
             .allocator = allocator };
     }
 
@@ -311,6 +317,84 @@ pub const Server = struct {
             const format = readUint(payload, 20);
             std.log.info("create_buffer id={} {}x{} stride={}", .{buf_id, width, height, stride});
             _ = self.surfaces.createBuffer(buf_id, client.pool_fd, width, height, stride, format);
+            return;
+        }
+
+        // xdg_wm_base.get_xdg_surface (opcode 2)
+        if (object_id == client.xdg_id and opcode == 2 and payload.len >= 8) {
+            const xdg_surface_id = readUint(payload, 0);
+            const wl_surface_id  = readUint(payload, 4);
+            std.log.info("xdg: get_xdg_surface id={} surface={}", .{xdg_surface_id, wl_surface_id});
+            // Registrar la asociación
+            if (client.xdg_surface_count < 8) {
+                client.xdg_surface_ids[client.xdg_surface_count] = xdg_surface_id;
+                client.xdg_surface_count += 1;
+            }
+            // Enviar configure inmediatamente
+            self.serial += 1;
+            xdg_mod.sendXdgSurfaceConfigure(client.fd, xdg_surface_id, self.serial);
+            return;
+        }
+
+        // xdg_wm_base.pong (opcode 3)
+        if (object_id == client.xdg_id and opcode == 3) return;
+
+        // xdg_surface.get_toplevel (opcode 1)
+        var is_xdg_surface = false;
+        for (client.xdg_surface_ids[0..client.xdg_surface_count]) |xid| {
+            if (xid == object_id) { is_xdg_surface = true; break; }
+        }
+        if (is_xdg_surface and opcode == 1 and payload.len >= 4) {
+            const toplevel_id = readUint(payload, 0);
+            // Encontrar la surface asociada a este xdg_surface
+            var surf_id: u32 = 0;
+            // Buscar en el orden de creación — el xdg_surface envuelve la surface
+            for (self.surfaces.surfaces) |s| {
+                if (s.id > 0 and s.client_fd == client.fd) { surf_id = s.id; break; }
+            }
+            _ = self.xdg.createToplevel(toplevel_id, object_id, surf_id, client.fd);
+            // Enviar toplevel configure + xdg_surface configure
+            xdg_mod.sendToplevelConfigure(client.fd, toplevel_id, 800, 600);
+            self.serial += 1;
+            xdg_mod.sendXdgSurfaceConfigure(client.fd, object_id, self.serial);
+            return;
+        }
+
+        // xdg_surface.ack_configure (opcode 4)
+        if (is_xdg_surface and opcode == 4) {
+            std.log.info("xdg: ack_configure", .{});
+            return;
+        }
+
+        // xdg_toplevel requests
+        if (self.xdg.getToplevel(object_id)) |tl| {
+            switch (opcode) {
+                0 => { // destroy
+                    self.xdg.destroyToplevel(object_id);
+                },
+                2 => { // set_title
+                    if (payload.len >= 4) {
+                        const slen = readUint(payload, 0);
+                        const copy = @min(slen, 127);
+                        if (payload.len >= 4 + copy) {
+                            @memcpy(tl.title[0..copy], payload[4..4+copy]);
+                            tl.title[copy] = 0;
+                            std.log.info("xdg: title={s}", .{tl.getTitle()});
+                        }
+                    }
+                },
+                3 => { // set_app_id
+                    if (payload.len >= 4) {
+                        const slen = readUint(payload, 0);
+                        const copy = @min(slen, 127);
+                        if (payload.len >= 4 + copy) {
+                            @memcpy(tl.app_id[0..copy], payload[4..4+copy]);
+                            tl.app_id[copy] = 0;
+                        }
+                    }
+                },
+                else => {},
+            }
             return;
         }
 
