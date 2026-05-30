@@ -5,6 +5,7 @@ const surface_mod = @import("surface.zig");
 
 pub const SurfaceManager = surface_mod.SurfaceManager;
 const xdg_mod = @import("xdg_shell.zig");
+const seat_mod = @import("seat.zig");
 pub const XdgManager = xdg_mod.XdgManager;
 
 pub fn readUint(data: []const u8, offset: usize) u32 {
@@ -49,6 +50,8 @@ pub const Client = struct {
     pool_count   : usize = 0,
     xdg_surface_ids: [8]u32 = std.mem.zeroes([8]u32),
     xdg_surface_count: usize = 0,
+    keyboard_id : u32 = 0,
+    pointer_id  : u32 = 0,
 
     pub fn init(fd: i32) Client { return .{ .fd = fd }; }
 
@@ -367,6 +370,27 @@ pub const Server = struct {
             return;
         }
 
+        // wl_seat.get_pointer (opcode 0)
+        if (object_id == client.seat_id and opcode == 0 and payload.len >= 4) {
+            client.pointer_id = readUint(payload, 0);
+            std.log.info("wl_pointer id={}", .{client.pointer_id});
+            return;
+        }
+        // wl_seat.get_keyboard (opcode 1)
+        if (object_id == client.seat_id and opcode == 1 and payload.len >= 4) {
+            client.keyboard_id = readUint(payload, 0);
+            seat_mod.sendKeymap(client.fd, client.keyboard_id);
+            // Enviar enter si hay superficie activa
+            for (self.surfaces.surfaces) |s| {
+                if (s.id > 0 and s.client_fd == client.fd and s.mapped) {
+                    self.serial += 1;
+                    seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, s.id, self.serial);
+                    break;
+                }
+            }
+            return;
+        }
+
         // xdg_wm_base.get_xdg_surface (opcode 2)
         if (object_id == client.xdg_id and opcode == 2 and payload.len >= 8) {
             const xdg_surface_id = readUint(payload, 0);
@@ -464,6 +488,16 @@ pub const Server = struct {
                         surf.mapped = true;
                         surf.pending_buf = null;
                         std.log.info("surface {} commit {}x{}", .{object_id, pb.width, pb.height});
+                        // Enviar keyboard enter y pointer enter al cliente
+                        if (client.keyboard_id > 0) {
+                            self.serial += 1;
+                            seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, object_id, self.serial);
+                            seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
+                        }
+                        if (client.pointer_id > 0) {
+                            self.serial += 1;
+                            seat_mod.sendPointerEnter(client.fd, client.pointer_id, self.serial, object_id, 100, 100);
+                        }
                     }
                 },
                 else => {},
