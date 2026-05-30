@@ -41,6 +41,8 @@ pub const Client = struct {
     shm_id       : u32 = 0,
     xdg_id       : u32 = 0,
     seat_id      : u32 = 0,
+    pool_id      : u32 = 0,
+    pool_fd      : i32 = -1,
 
     pub fn init(fd: i32) Client { return .{ .fd = fd }; }
 
@@ -223,6 +225,7 @@ pub const Server = struct {
     }
 
     fn dispatch(self: *Server, client: *Client, object_id: u32, opcode: u16, payload: []const u8) void {
+        std.log.info("DISPATCH obj={} op={} len={} shm_id={} comp_id={}", .{object_id, opcode, payload.len, client.shm_id, client.compositor_id});
         if (object_id == 1) {
             switch (opcode) {
                 0 => { // sync
@@ -253,8 +256,8 @@ pub const Server = struct {
             return;
         }
 
-        // registry bind
-        if (opcode == 0 and payload.len >= 8) {
+        // registry bind — solo para object_id=2 (wl_registry)
+        if (object_id == 2 and opcode == 0 and payload.len >= 8) {
             const name   = readUint(payload, 0);
             const new_id = readUint(payload, payload.len - 4);
             switch (name) {
@@ -278,6 +281,36 @@ pub const Server = struct {
                 const new_id = readUint(payload, 0);
                 _ = self.surfaces.createSurface(new_id, client.fd);
             }
+            return;
+        }
+
+        // wl_shm.create_pool: new_id(u32) + fd(via SCM_RIGHTS) + size(i32)
+        // Como no tenemos SCM_RIGHTS, usamos el archivo /tmp/bs_buf directamente
+        std.log.info("dispatch: obj={} shm_id={} op={}", .{object_id, client.shm_id, opcode});
+        if (object_id == client.shm_id and opcode == 0 and payload.len >= 12) {
+            const pool_id = readUint(payload, 0);
+            const client_fd = readUint(payload, 4);  // fd enviado como u32
+            const size: u32 = readUint(payload, 8);
+            // Abrir archivo directamente
+            var path: [32:0]u8 = std.mem.zeroes([32:0]u8);
+            _ = std.fmt.bufPrint(&path, "/tmp/bs_buf", .{}) catch {};
+            const file_rc = linux.open(&path, .{ .ACCMODE = .RDONLY }, 0);
+            const file_fd: i32 = @bitCast(@as(u32, @truncate(file_rc)));
+            std.log.info("create_pool id={} client_fd={} size={} file_fd={}", .{pool_id, client_fd, size, file_fd});
+            client.pool_fd = file_fd;
+            client.pool_id = pool_id;
+            return;
+        }
+
+        // wl_shm_pool.create_buffer
+        if (client.pool_id > 0 and object_id == client.pool_id and opcode == 0 and payload.len >= 20) {
+            const buf_id = readUint(payload, 0);
+            const width  = readInt(payload, 8);
+            const height = readInt(payload, 12);
+            const stride = readInt(payload, 16);
+            const format = readUint(payload, 20);
+            std.log.info("create_buffer id={} {}x{} stride={}", .{buf_id, width, height, stride});
+            _ = self.surfaces.createBuffer(buf_id, client.pool_fd, width, height, stride, format);
             return;
         }
 

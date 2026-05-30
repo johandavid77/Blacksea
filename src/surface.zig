@@ -185,10 +185,8 @@ pub const SurfaceManager = struct {
             while (dx < x1) : (dx += 1) {
                 const sx = dx - x0;
                 const pixel = src_pixels[sy * src_stride + sx];
-                // Alpha blending simple: si alpha > 0, copiar
-                if ((pixel >> 24) > 0) {
-                    dst[dy * (dst_pitch / 4) + dx] = pixel;
-                }
+                // Copiar píxel directo (XRGB8888 no usa alpha)
+                dst[dy * (dst_pitch / 4) + dx] = pixel | 0xFF000000;
             }
         }
     }
