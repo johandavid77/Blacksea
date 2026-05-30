@@ -45,6 +45,8 @@ pub const Client = struct {
     seat_id      : u32 = 0,
     pool_id      : u32 = 0,
     pool_fd      : i32 = -1,
+    pool_ids     : [8]u32 = std.mem.zeroes([8]u32),
+    pool_count   : usize = 0,
     xdg_surface_ids: [8]u32 = std.mem.zeroes([8]u32),
     xdg_surface_count: usize = 0,
 
@@ -80,7 +82,11 @@ pub const globals = [_]struct { name: []const u8, version: u32 }{
     .{ .name = "wl_shm",        .version = 1 },
     .{ .name = "xdg_wm_base",   .version = 2 },
     .{ .name = "wl_seat",       .version = 7 },
-    .{ .name = "wl_output",     .version = 4 },
+    .{ .name = "wl_output",        .version = 4 },
+    .{ .name = "wl_subcompositor",      .version = 1 },
+    .{ .name = "wl_data_device_manager",    .version = 3 },
+    .{ .name = "zwp_text_input_manager_v3", .version = 1 },
+    .{ .name = "zxdg_decoration_manager_v1", .version = 1 },
 };
 
 pub const Server = struct {
@@ -198,10 +204,27 @@ pub const Server = struct {
             if (!found) continue;
             if (pfds[pfd_idx].revents & linux.POLL.IN == 0) continue;
 
-            // Leer datos
-            const n = linux.read(@intCast(client.fd),
-                client.recv_buf[client.recv_len..].ptr,
-                client.recv_buf.len - client.recv_len);
+            // recvmsg para capturar SCM_RIGHTS del shm fd
+            var cmsg_main: [256]u8 align(8) = std.mem.zeroes([256]u8);
+            var iov_main = std.posix.iovec{
+                .base = client.recv_buf[client.recv_len..].ptr,
+                .len  = client.recv_buf.len - client.recv_len,
+            };
+            var rmsg_main = linux.msghdr{
+                .name = null, .namelen = 0,
+                .iov = @ptrCast(&iov_main), .iovlen = 1,
+                .control = &cmsg_main, .controllen = cmsg_main.len,
+                .flags = 0,
+            };
+            const n = linux.recvmsg(@intCast(client.fd), &rmsg_main, 0);
+            if (rmsg_main.controllen >= @sizeOf(linux.cmsghdr)) {
+                const cm: *linux.cmsghdr = @ptrCast(@alignCast(&cmsg_main));
+                if (cm.level == linux.SOL.SOCKET and cm.type == 1) {
+                    const sfd: *i32 = @ptrCast(@alignCast(&cmsg_main[@sizeOf(linux.cmsghdr)]));
+                    client.pool_fd = sfd.*;
+                    std.log.info("SCM_RIGHTS(poll): shm_fd={}", .{sfd.*});
+                }
+            }
             const bytes: isize = @bitCast(n);
             if (bytes <= 0) {
                 _ = linux.close(@intCast(client.fd));
@@ -276,7 +299,16 @@ pub const Server = struct {
                     client.sendEvent(new_id, 0, b2.slice());
                 },
                 3 => { client.xdg_id = new_id; },
-                4 => { client.seat_id = new_id; },
+                4 => {
+                    client.seat_id = new_id;
+                    // wl_seat::capabilities event (op=0): keyboard|pointer = 3
+                    var b = MsgBuf{}; b.uint(3);
+                    client.sendEvent(new_id, 0, b.slice());
+                    // wl_seat::name event (op=1)
+                    var n = MsgBuf{}; n.string("seat0");
+                    client.sendEvent(new_id, 1, n.slice());
+                    std.log.info("wl_seat bound id={} capabilities enviadas", .{new_id});
+                },
                 else => {},
             }
             return;
@@ -293,30 +325,45 @@ pub const Server = struct {
         // wl_shm.create_pool: new_id(u32) + fd(via SCM_RIGHTS) + size(i32)
         // Como no tenemos SCM_RIGHTS, usamos el archivo /tmp/bs_buf directamente
         std.log.info("dispatch: obj={} shm_id={} op={}", .{object_id, client.shm_id, opcode});
-        if (object_id == client.shm_id and opcode == 0 and payload.len >= 12) {
+        if (object_id == client.shm_id and opcode == 0 and payload.len >= 8) {
             const pool_id = readUint(payload, 0);
-            const client_fd = readUint(payload, 4);  // fd enviado como u32
-            const size: u32 = readUint(payload, 8);
+            const size: u32 = if (payload.len >= 8) readUint(payload, 4) else 0;
+            const client_fd: u32 = 0; _ = client_fd;
             // Abrir archivo directamente
             var path: [32:0]u8 = std.mem.zeroes([32:0]u8);
             _ = std.fmt.bufPrint(&path, "/tmp/bs_buf", .{}) catch {};
-            const file_rc = linux.open(&path, .{ .ACCMODE = .RDONLY }, 0);
-            const file_fd: i32 = @bitCast(@as(u32, @truncate(file_rc)));
-            std.log.info("create_pool id={} client_fd={} size={} file_fd={}", .{pool_id, client_fd, size, file_fd});
+            // Usar SCM_RIGHTS fd si ya lo recibimos, sino abrir archivo
+            var file_fd: i32 = client.pool_fd;
+            if (file_fd < 0) {
+                const file_rc = linux.open(&path, .{ .ACCMODE = .RDONLY }, 0);
+                file_fd = @bitCast(@as(u32, @truncate(file_rc)));
+            }
+            std.log.info("create_pool id={} size={} pool_fd={}", .{pool_id, size, file_fd});
             client.pool_fd = file_fd;
             client.pool_id = pool_id;
+            if (client.pool_count < 8) {
+                client.pool_ids[client.pool_count] = pool_id;
+                client.pool_count += 1;
+            }
             return;
         }
 
-        // wl_shm_pool.create_buffer
-        if (client.pool_id > 0 and object_id == client.pool_id and opcode == 0 and payload.len >= 20) {
+        // wl_shm_pool.create_buffer — aceptar cualquier pool conocido
+        const is_pool = blk: {
+            for (client.pool_ids[0..client.pool_count]) |pid| {
+                if (pid == object_id) break :blk true;
+            }
+            break :blk false;
+        };
+        if (is_pool and opcode == 0 and payload.len >= 20) {
             const buf_id = readUint(payload, 0);
+            const offset = readInt(payload, 4);
             const width  = readInt(payload, 8);
             const height = readInt(payload, 12);
             const stride = readInt(payload, 16);
-            const format = readUint(payload, 20);
-            std.log.info("create_buffer id={} {}x{} stride={}", .{buf_id, width, height, stride});
-            _ = self.surfaces.createBuffer(buf_id, client.pool_fd, width, height, stride, format);
+            const format = if (payload.len >= 24) readUint(payload, 20) else 1;
+            std.log.info("create_buffer id={} offset={} {}x{} stride={} fd={}", .{buf_id, offset, width, height, stride, client.pool_fd});
+            _ = self.surfaces.createBuffer(buf_id, client.pool_fd, width, height, stride, format, offset);
             return;
         }
 

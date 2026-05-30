@@ -119,6 +119,7 @@ pub const SurfaceManager = struct {
         height : i32,
         stride : i32,
         format : u32,
+        offset  : i32,
     ) ?*Buffer {
         for (&self.buffers) |*b| {
             if (b.fd == -1) {
@@ -128,7 +129,7 @@ pub const SurfaceManager = struct {
                     null, size,
                     std.posix.PROT{ .READ = true },
                     .{ .TYPE = .SHARED },
-                    fd, 0,
+                    fd, @intCast(offset),
                 ) catch {
                     std.log.err("surface: mmap buffer falló", .{});
                     _ = linux.close(@intCast(fd));
