@@ -1,104 +1,102 @@
 #!/usr/bin/env python3
-"""
-Cliente Wayland mínimo para probar Blacksea.
-Se conecta al socket, bindea wl_compositor + wl_shm,
-crea una superficie y muestra un rectángulo rojo.
-"""
-import socket, struct, os, mmap, tempfile
+import socket, struct, os, mmap, array, time
 
 SOCKET = "/run/user/1000/wayland-0"
 
-def pack_msg(obj_id, opcode, *args):
-    payload = b""
-    for a in args:
-        if isinstance(a, int):   payload += struct.pack("<I", a)
-        elif isinstance(a, str):
-            s = a.encode() + b"\x00"
-            pad = (4 - len(s) % 4) % 4
-            payload += struct.pack("<I", len(s)) + s + bytes(pad)
-        elif isinstance(a, bytes): payload += a
+def u32(v): return struct.pack("<I", v)
+def i32(v): return struct.pack("<i", v)
+def wl_str(s):
+    b = s.encode() + b"\x00"
+    pad = (4 - len(b) % 4) % 4
+    return u32(len(b)) + b + bytes(pad)
+def msg(obj, op, payload=b""):
     size = 8 + len(payload)
-    return struct.pack("<IHH", obj_id, size, opcode) + payload
+    return struct.pack("<II", obj, (size << 16) | op) + payload
 
-def recv_msg(sock):
-    h = sock.recv(8)
-    if len(h) < 8: return None, None, None
-    obj, size_op = struct.unpack("<II", h)
-    size = size_op >> 16
-    op   = size_op & 0xFFFF
-    payload = sock.recv(size - 8) if size > 8 else b""
-    return obj, op, payload
+def recv_msgs(sock, timeout=3.0):
+    """Leer todos los mensajes disponibles"""
+    sock.settimeout(timeout)
+    buf = b""
+    try:
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk: break
+            buf += chunk
+            # Si recibimos el callback de sync, terminamos
+            if len(buf) >= 8:
+                break
+    except socket.timeout:
+        pass
+    sock.settimeout(None)
+    
+    msgs = []
+    while len(buf) >= 8:
+        obj = struct.unpack("<I", buf[0:4])[0]
+        so  = struct.unpack("<I", buf[4:8])[0]
+        sz  = so >> 16
+        op  = so & 0xFFFF
+        if sz < 8 or len(buf) < sz: break
+        msgs.append((obj, op, buf[8:sz]))
+        buf = buf[sz:]
+    return msgs
 
-# Conectar
+REGISTRY=2; COMPOSITOR=3; SHM=4; SURFACE=5; SHM_POOL=6; BUFFER=7
+
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.connect(SOCKET)
 print("Conectado a Blacksea!")
 
-# IDs
-WL_DISPLAY    = 1
-WL_REGISTRY   = 2
-WL_COMPOSITOR = 3
-WL_SHM        = 4
-WL_SURFACE    = 5
-WL_SHM_POOL   = 6
-WL_BUFFER     = 7
-
 # get_registry
-sock.sendall(pack_msg(WL_DISPLAY, 1, WL_REGISTRY))
+sock.sendall(msg(1, 1, u32(REGISTRY)))
+# sync para saber cuando Blacksea terminó de enviar globals
+sock.sendall(msg(1, 0, u32(100)))
 
-# Leer globals
-sock.settimeout(1.0)
+# Esperar respuestas
+time.sleep(0.05)
+all_msgs = recv_msgs(sock, 2.0)
+
 compositor_name = shm_name = None
-try:
-    while True:
-        obj, op, payload = recv_msg(sock)
-        if obj == WL_REGISTRY and op == 0:  # global
-            name = struct.unpack("<I", payload[:4])[0]
-            iface_len = struct.unpack("<I", payload[4:8])[0]
-            iface = payload[8:8+iface_len-1].decode()
-            print(f"  global {name}: {iface}")
+for obj, op, payload in all_msgs:
+    print(f"  msg obj={obj} op={op} len={len(payload)}")
+    if obj == REGISTRY and op == 0 and len(payload) >= 8:
+        name = struct.unpack("<I", payload[0:4])[0]
+        slen = struct.unpack("<I", payload[4:8])[0]
+        if slen > 0 and len(payload) >= 8 + slen:
+            iface = payload[8:8+slen-1].decode(errors='ignore')
+            print(f"    global {name}: {iface}")
             if iface == "wl_compositor": compositor_name = name
             if iface == "wl_shm":        shm_name = name
-except: pass
 
-# Bind
-sock.settimeout(None)
-sock.sendall(pack_msg(WL_REGISTRY, 0, compositor_name, b"\x00"*4 + b"\x04\x00\x00\x00", WL_COMPOSITOR))
-sock.sendall(pack_msg(WL_REGISTRY, 0, shm_name,        b"\x00"*4 + b"\x01\x00\x00\x00", WL_SHM))
+if compositor_name is None:
+    print("ERROR: no recibimos globals")
+    sock.close(); exit(1)
 
-# Crear superficie
-sock.sendall(pack_msg(WL_COMPOSITOR, 0, WL_SURFACE))
+print(f"OK: compositor={compositor_name} shm={shm_name}")
 
-# Crear shm pool con memfd
-WIDTH, HEIGHT = 200, 200
-STRIDE = WIDTH * 4
-SIZE   = STRIDE * HEIGHT
+# Bind y crear superficie
+sock.sendall(msg(REGISTRY, 0, u32(compositor_name) + wl_str("wl_compositor") + u32(4) + u32(COMPOSITOR)))
+sock.sendall(msg(REGISTRY, 0, u32(shm_name) + wl_str("wl_shm") + u32(1) + u32(SHM)))
+time.sleep(0.2)
+sock.sendall(msg(COMPOSITOR, 0, u32(SURFACE)))
+time.sleep(0.1)
 
-fd = os.memfd_create("blacksea-test", 0)
+# Buffer azul 300x200
+W, H, STRIDE = 300, 200, 300*4
+SIZE = STRIDE * H
+fd = os.memfd_create("bs", 0)
 os.ftruncate(fd, SIZE)
 mm = mmap.mmap(fd, SIZE)
+mm.write(b"\xFF\x00\x00\xFF" * (W * H))
 
-# Pintar rojo brillante
-for y in range(HEIGHT):
-    for x in range(WIDTH):
-        # ARGB8888: alpha=FF, R=FF, G=00, B=00
-        mm.write(struct.pack("<I", 0xFFFF0000))
-mm.seek(0)
+sock.sendmsg(
+    [msg(SHM, 0, u32(SHM_POOL) + u32(SIZE))],
+    [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array('i',[fd]))]
+)
+time.sleep(0.2)
+sock.sendall(msg(SHM_POOL, 0, u32(BUFFER)+u32(0)+i32(W)+i32(H)+i32(STRIDE)+u32(0)))
+sock.sendall(msg(SURFACE, 1, u32(BUFFER)+i32(100)+i32(50)))
+sock.sendall(msg(SURFACE, 6))
 
-# create_pool(fd, size) — enviar fd via SCM_RIGHTS
-import array
-fds_array = array.array('i', [fd])
-ancdata = [(socket.SOL_SOCKET, socket.SCM_RIGHTS, fds_array)]
-msg = pack_msg(WL_SHM, 0, WL_SHM_POOL, SIZE)
-sock.sendmsg([msg], ancdata)
-
-# create_buffer(pool, offset, width, height, stride, format)
-sock.sendall(pack_msg(WL_SHM_POOL, 0, WL_BUFFER, 0, WIDTH, HEIGHT, STRIDE, 1))  # format=XRGB8888
-
-# attach + commit
-sock.sendall(pack_msg(WL_SURFACE, 1, WL_BUFFER, 100, 50))  # attach en (100, 50)
-sock.sendall(pack_msg(WL_SURFACE, 6))  # commit
-
-print("Superficie enviada! Debería aparecer un rectángulo rojo en Blacksea.")
-import time; time.sleep(5)
+print("Superficie enviada! Mirá la VM...")
+time.sleep(10)
 sock.close()

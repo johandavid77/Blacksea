@@ -1,9 +1,9 @@
 const std = @import("std");
 const linux = std.os.linux;
-const wayland = @import("wayland.zig");
-const surface_mod = @import("surface.zig");
 const drm = @import("drm.zig");
 const evdev = @import("evdev.zig");
+const wayland = @import("wayland.zig");
+const surface_mod = @import("surface.zig");
 
 pub const Colors = struct {
     pub const background : u32 = 0xFF0D1117;
@@ -35,9 +35,16 @@ pub fn main() !void {
     const allocator = da.allocator();
 
     bsLog(.info, "blacksea: iniciando...", .{});
+    // Ignorar SIGPIPE — evita muerte cuando cliente cierra socket
+    const sig_ign = linux.Sigaction{
+        .handler = .{ .handler = linux.SIG.IGN },
+        .mask = std.mem.zeroes(linux.sigset_t),
+        .flags = 0,
+    };
+    _ = linux.sigaction(linux.SIG.PIPE, &sig_ign, null);
 
     var device = drm.Device.autoDetect(allocator) catch |err| {
-        bsLog(.err, "no se pudo abrir DRM: {} — correr en TTY con usuario en grupo 'video'", .{err});
+        bsLog(.err, "no se pudo abrir DRM: {}", .{err});
         return err;
     };
     defer device.close();
@@ -52,26 +59,24 @@ pub fn main() !void {
 
     // Servidor Wayland
     var wl_server = wayland.Server.init(allocator) catch |err| blk: {
-        bsLog(.warn, "wayland: no se pudo iniciar socket: {}", .{err});
+        bsLog(.warn, "wayland socket falló: {}", .{err});
         break :blk null;
     };
     defer if (wl_server) |*s| s.deinit();
-
-    if (wl_server != null) {
-    }
 
     drawFrame(output, .scrolling, output.width / 2, output.height / 2);
     try output.pageFlip(device.fd);
 
     bsLog(.info, "corriendo — Super+Q=salir  Super+Space=layout", .{});
 
-    var running     = true;
-    var mode        : LayoutMode = .scrolling;
-    var cursor_x    : i32 = @intCast(output.width  / 2);
-    var cursor_y    : i32 = @intCast(output.height / 2);
-    var dirty       = false;
+    var running    = true;
+    var mode       : LayoutMode = .scrolling;
+    var cursor_x   : i32 = @intCast(output.width  / 2);
+    var cursor_y   : i32 = @intCast(output.height / 2);
+    var dirty      = false;
 
     while (running) {
+        // ── Input ────────────────────────────────────────────────────────
         for (input.devices[0..input.count]) |*dev| {
             var ev: evdev.InputEvent = undefined;
             while (std.posix.read(dev.fd, std.mem.asBytes(&ev))) |n| {
@@ -97,22 +102,27 @@ pub fn main() !void {
                 }
             } else |_| {}
         }
+
         if (!running) break;
 
-        // Aceptar y procesar clientes Wayland
+        // ── Wayland: siempre procesar, independiente del redraw ───────────
         if (wl_server) |*s| {
-            s.acceptClient();
-            s.pollClients();
+            s.poll();
+            if (s.surfaces.count > 0) dirty = true;
         }
 
+        // ── Render ───────────────────────────────────────────────────────
         if (dirty) {
             drawFrame(output, mode, @intCast(cursor_x), @intCast(cursor_y));
             if (wl_server) |*s| blitSurfaces(output, &s.surfaces);
             try output.pageFlip(device.fd);
             dirty = false;
         }
-        _ = linux.nanosleep(&.{ .sec = 0, .nsec = 16_000_000 }, null);
+
+        // poll() ya esperó 16ms, solo agregamos pequeño sleep extra si no hubo trabajo
+        if (!dirty) { _ = linux.nanosleep(&.{ .sec = 0, .nsec = 4_000_000 }, null); }
     }
+
     bsLog(.info, "blacksea: hasta luego.", .{});
 }
 
