@@ -31,6 +31,10 @@ fn bsLog(comptime level: std.log.Level, comptime fmt: []const u8, args: anytype)
 }
 
 pub fn main() !void {
+    // Ignorar SIGBUS con SA_RESETHAND=0
+    var sa: [152]u8 = std.mem.zeroes([152]u8);
+    std.mem.writeInt(usize, sa[0..8], 1, .little); // SIG_IGN
+    _ = linux.syscall4(.rt_sigaction, 7, @intFromPtr(&sa), 0, 8); // SIGBUS=7
     // Ignorar SIGBUS via syscall directo
     const SIG_IGN: usize = 1;
     const SIGBUS: usize = 7;
@@ -169,9 +173,9 @@ var g_start_ms: u64 = 0;
 
 fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
     const fb = output.drawBuffer();
-    // Copiar fondo actual (ya dibujado por drawFrame) al back buffer
+    // Fondo en back_pixels (no tocar fb.data)
     const n = @min(back_pixels.len, fb.data.len);
-    @memcpy(back_pixels[0..n], fb.data[0..n]);
+    @memset(back_pixels[0..n], 0);
     for (&surfaces.surfaces) |*surf| {
         if (surf.id == 0 or !surf.mapped) continue;
         // Verificar buffer válido
@@ -179,6 +183,6 @@ fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
         if (surf.buffer.?.fd < 0 or surf.buffer.?.data.len == 0) continue;
         surfaces.blitSurface(surf, back_pixels[0..fb.data.len], @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
     }
-    // Escribir directo al mmap — es la única forma con fb0
+    // Copiar back buffer al framebuffer
     @memcpy(fb.data[0..n], back_pixels[0..n]);
 }

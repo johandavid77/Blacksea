@@ -79,13 +79,26 @@ pub const Output = struct {
     width : u32,
     height: u32,
     fb    : Framebuffer,
-    fd    : i32,
+    fd       : i32,
+    fd_write : i32 = -1,
 
     pub fn drawBuffer(self: *Output) *Framebuffer { return &self.fb; }
 
     // Con /dev/fb0 no hay page flip — escribimos directo
     // En el futuro podemos hacer doble buffer con pan
-    pub fn pageFlip(self: *Output, _: i32) !void { _ = self; }
+    pub fn pageFlip(self: *Output, _: i32) !void {
+        if (self.fd_write >= 0) {
+            const bytes = std.mem.sliceAsBytes(self.fb.data);
+            _ = std.os.linux.lseek(@intCast(self.fd_write), 0, std.os.linux.SEEK.SET);
+            var off: usize = 0;
+            while (off < bytes.len) {
+                const r = std.os.linux.write(@intCast(self.fd_write), bytes.ptr + off, bytes.len - off);
+                const n = @as(isize, @bitCast(r));
+                if (n <= 0) break;
+                off += @intCast(n);
+            }
+        }
+    }
 };
 
 pub const Device = struct {
@@ -134,10 +147,11 @@ pub const Device = struct {
         const pixels = @as([*]u32, @ptrCast(@alignCast(ptr.ptr)))[0..size/4];
 
         self.output = Output{
-            .width  = width,
-            .height = height,
-            .fd     = self.fd,
-            .fb     = Framebuffer{
+            .width    = width,
+            .height   = height,
+            .fd       = self.fd,
+            .fd_write = self.fd,
+            .fb       = Framebuffer{
                 .width  = width,
                 .height = height,
                 .pitch  = pitch,
