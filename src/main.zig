@@ -4,6 +4,7 @@ const drm = @import("drm.zig");
 const evdev = @import("evdev.zig");
 const wayland = @import("wayland.zig");
 const surface_mod = @import("surface.zig");
+const seat_mod    = @import("seat.zig");
 
 pub const Colors = struct {
     pub const background : u32 = 0xFF0D1117;
@@ -94,6 +95,23 @@ pub fn main() !void {
                         if (input.mods.super and ev.code == evdev.KEY_Q)     { running = false; break; }
                         if (input.mods.super and ev.code == evdev.KEY_SPACE) { mode = mode.toggle(); dirty = true; }
                     }
+                // Reenviar tecla al cliente Wayland activo
+                if (wl_server) |*srv| {
+                    const key_state: u32 = if (ev.value == evdev.KEY_PRESSED) 1 else 0;
+                    for (&srv.clients) |*slot| {
+                        if (slot.*) |*cl| {
+                            if (cl.keyboard_id > 0) {
+                                srv.serial += 1;
+                                var ts: std.os.linux.timespec = undefined;
+                                _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
+                                const now_ms: u32 = @truncate(@as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / 1_000_000);
+                                seat_mod.sendKey(cl.fd, cl.keyboard_id, srv.serial, now_ms, ev.code, key_state);
+                                dirty = true;
+                                break;
+                            }
+                        }
+                    }
+                }
                 }
                 if (ev.type == evdev.EV_REL) {
                     if (ev.code == evdev.REL_X) cursor_x = @max(0, @min(@as(i32,@intCast(output.width))-1,  cursor_x+ev.value));

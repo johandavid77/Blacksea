@@ -501,6 +501,16 @@ pub const Server = struct {
                 },
                 6 => { // commit
                     if (surf.pending_buf) |pb| {
+                        // Liberar buffer anterior si existe
+                        if (surf.buffer) |old_buf| {
+                            if (old_buf != pb) {
+                                var rel: [8]u8 = undefined;
+                                std.mem.writeInt(u32, rel[0..4], old_buf.id, .little);
+                                std.mem.writeInt(u32, rel[4..8], (8 << 16) | 0, .little);
+                                _ = linux.sendto(@intCast(client.fd), &rel, rel.len, linux.MSG.NOSIGNAL, null, 0);
+                                old_buf.fd = -1; // marcar slot libre
+                            }
+                        }
                         surf.buffer = pb;
                         surf.width  = pb.width;
                         surf.height = pb.height;

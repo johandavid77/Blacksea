@@ -122,6 +122,13 @@ pub const SurfaceManager = struct {
         offset  : i32,
     ) ?*Buffer {
         for (&self.buffers) |*b| {
+            if (b.id == id and b.fd >= 0) {
+                // Reusar slot — desmapear el mmap anterior
+                if (b.data.len > 0) std.posix.munmap(@alignCast(b.data));
+                b.fd = -1;
+            }
+        }
+        for (&self.buffers) |*b| {
             if (b.fd == -1) {
                 const size: usize = @intCast(stride * height);
                 const off: usize = @intCast(offset);
