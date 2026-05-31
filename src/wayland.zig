@@ -423,7 +423,7 @@ pub const Server = struct {
             }
             _ = self.xdg.createToplevel(toplevel_id, object_id, surf_id, client.fd);
             // Enviar toplevel configure + xdg_surface configure
-            xdg_mod.sendToplevelConfigure(client.fd, toplevel_id, 800, 600);
+            xdg_mod.sendToplevelConfigure(client.fd, toplevel_id, 1280, 768);
             self.serial += 1;
             xdg_mod.sendXdgSurfaceConfigure(client.fd, object_id, self.serial);
             return;
@@ -478,8 +478,7 @@ pub const Server = struct {
                 1 => { // attach
                     if (payload.len >= 12) {
                         const buf_id = readUint(payload, 0);
-                        surf.x = readInt(payload, 4);
-                        surf.y = readInt(payload, 8);
+                        // x,y en attach son deprecated — ignorar
                         surf.pending_buf = self.surfaces.getBuffer(buf_id);
                     }
                 },

@@ -127,7 +127,7 @@ pub const Device = struct {
         const ptr = try std.posix.mmap(
             null, size,
             std.posix.PROT{ .READ = true, .WRITE = true },
-            .{ .TYPE = .SHARED },
+            .{ .TYPE = .PRIVATE },
             self.fd, 0,
         );
 

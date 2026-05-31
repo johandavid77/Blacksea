@@ -169,29 +169,16 @@ var g_start_ms: u64 = 0;
 
 fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
     const fb = output.drawBuffer();
-    // Render al back buffer en RAM — no tocar fb.data todavía
+    // Copiar fondo actual (ya dibujado por drawFrame) al back buffer
     const n = @min(back_pixels.len, fb.data.len);
-    @memset(back_pixels[0..n], 0);
+    @memcpy(back_pixels[0..n], fb.data[0..n]);
     for (&surfaces.surfaces) |*surf| {
         if (surf.id == 0 or !surf.mapped) continue;
-        // Verificar que el buffer sigue siendo válido
-        if (surf.buffer) |buf| {
-            if (buf.fd < 0 or buf.data.len == 0) {
-                surf.mapped = false;
-                continue;
-            }
-            // Test de acceso seguro: verificar que el fd sigue abierto
-            const rc = linux.syscall2(.fstat, @intCast(buf.fd), 0);
-            if (@as(isize, @bitCast(rc)) < 0) {
-                surf.mapped = false;
-                buf.fd = -1;
-                buf.data = &.{};
-                continue;
-            }
-        }
+        // Verificar buffer válido
+        if (surf.buffer == null) continue;
+        if (surf.buffer.?.fd < 0 or surf.buffer.?.data.len == 0) continue;
         surfaces.blitSurface(surf, back_pixels[0..fb.data.len], @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
     }
-    // Copiar back buffer al framebuffer via write() — evita SIGBUS del mmap
-    const fb_bytes = std.mem.sliceAsBytes(back_pixels[0..n]);
-    _ = linux.pwrite(@intCast(output.fd), fb_bytes.ptr, fb_bytes.len, 0);
+    // Escribir directo al mmap — es la única forma con fb0
+    @memcpy(fb.data[0..n], back_pixels[0..n]);
 }

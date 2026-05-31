@@ -181,11 +181,16 @@ pub const SurfaceManager = struct {
     ) void {
         _ = self;
         const buf = surf.buffer orelse return;
-        // Validar posición de superficie
-        if (surf.x < 0 or surf.y < 0) return;
-        if (@as(u32, @intCast(surf.x)) >= dst_w or @as(u32, @intCast(surf.y)) >= dst_h) return;
+        // Validar posición
+        if (surf.x >= @as(i32, @intCast(dst_w)) or surf.y >= @as(i32, @intCast(dst_h))) return;
         if (buf.data.len == 0) return;
         if (buf.width <= 0 or buf.height <= 0 or buf.stride <= 0) return;
+        // Verificar que el fd del buffer sigue abierto
+        if (buf.fd < 0) return;
+        var fdpath: [48]u8 = undefined;
+        const fdstr = std.fmt.bufPrint(&fdpath, "/proc/self/fd/{}", .{buf.fd}) catch return;
+        const acc = linux.syscall4(.faccessat, @as(usize, @bitCast(@as(isize, -100))), @intFromPtr(fdstr.ptr), 4, 0);
+        if (@as(isize, @bitCast(acc)) != 0) { surf.buffer = null; return; }
 
         const sw: u32 = @intCast(buf.width);
         const sh: u32 = @intCast(buf.height);
