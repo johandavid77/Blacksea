@@ -88,8 +88,6 @@ pub const globals = [_]struct { name: []const u8, version: u32 }{
     .{ .name = "wl_output",        .version = 4 },
     .{ .name = "wl_subcompositor",      .version = 1 },
     .{ .name = "wl_data_device_manager",    .version = 3 },
-    .{ .name = "zwp_text_input_manager_v3", .version = 1 },
-    .{ .name = "zxdg_decoration_manager_v1", .version = 1 },
 };
 
 pub const Server = struct {
@@ -492,10 +490,6 @@ pub const Server = struct {
                         var b = MsgBuf{};
                         b.uint(0); // timestamp ms
                         client.sendEvent(cb_id, 0, b.slice());
-                        // Enviar wl_display.delete_id para limpiar el objeto
-                        var d = MsgBuf{};
-                        d.uint(cb_id);
-                        client.sendEvent(1, 1, d.slice());
                     }
                     return;
                 },
@@ -517,15 +511,11 @@ pub const Server = struct {
                         surf.mapped = true;
                         surf.pending_buf = null;
                         std.log.info("surface {} commit {}x{}", .{object_id, pb.width, pb.height});
-                        // Enviar keyboard enter y pointer enter al cliente
-                        if (client.keyboard_id > 0) {
+                        // Solo ventanas con toplevel reciben foco de teclado
+                        if (client.keyboard_id > 0 and !surf.mapped and surf.xdg_toplevel_id > 0) {
                             self.serial += 1;
                             seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, object_id, self.serial);
                             seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
-                        }
-                        if (client.pointer_id > 0) {
-                            self.serial += 1;
-                            seat_mod.sendPointerEnter(client.fd, client.pointer_id, self.serial, object_id, 100, 100);
                         }
                     }
                 },

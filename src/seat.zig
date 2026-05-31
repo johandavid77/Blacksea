@@ -119,6 +119,11 @@ pub fn sendKeymap(fd: i32, keyboard_id: u32) void {
     _ = linux.sendmsg(@intCast(fd), @ptrCast(&msghdr), linux.MSG.NOSIGNAL);
     _ = linux.close(@intCast(mfd_i));
     std.log.info("wl_keyboard keymap enviado fd={}", .{keyboard_id});
+    // repeat_info: rate=25 delay=600
+    var ri: [8]u8 = undefined;
+    std.mem.writeInt(u32, ri[0..4], 25, .little);
+    std.mem.writeInt(u32, ri[4..8], 600, .little);
+    sendEvent(fd, keyboard_id, 5, &ri);
 }
 
 /// Enviar wl_keyboard.enter (el cliente recibe el foco)

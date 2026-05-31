@@ -110,7 +110,8 @@ pub fn main() !void {
                                 srv.serial += 1;
                                 var ts: std.os.linux.timespec = undefined;
                                 _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
-                                const now_ms: u32 = @truncate(@as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / 1_000_000);
+                                const abs_ms: u64 = @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / 1_000_000;
+                                const now_ms: u32 = @truncate(abs_ms - g_start_ms);
                                 seat_mod.sendKey(cl.fd, cl.keyboard_id, srv.serial, now_ms, ev.code, key_state);
                                 dirty = true;
                                 break;
@@ -164,6 +165,7 @@ fn drawFrame(output: *drm.Output, mode: LayoutMode, cx: u32, cy: u32) void {
 }
 
 var back_pixels: [1280 * 800]u32 = std.mem.zeroes([1280 * 800]u32);
+var g_start_ms: u64 = 0;
 
 fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
     const fb = output.drawBuffer();
