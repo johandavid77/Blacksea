@@ -143,6 +143,6 @@ fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
     const fb = output.drawBuffer();
     for (&surfaces.surfaces) |*surf| {
         if (surf.id == 0 or !surf.mapped) continue;
-        surface_mod.SurfaceManager.blitSurface(surf, fb.data, output.width, output.height, fb.pitch);
+        surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
     }
 }

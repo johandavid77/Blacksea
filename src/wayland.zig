@@ -485,6 +485,20 @@ pub const Server = struct {
                         surf.pending_buf = self.surfaces.getBuffer(buf_id);
                     }
                 },
+                3 => { // frame callback
+                    if (payload.len >= 4) {
+                        const cb_id = readUint(payload, 0);
+                        // Enviar wl_callback.done inmediatamente
+                        var b = MsgBuf{};
+                        b.uint(0); // timestamp ms
+                        client.sendEvent(cb_id, 0, b.slice());
+                        // Enviar wl_display.delete_id para limpiar el objeto
+                        var d = MsgBuf{};
+                        d.uint(cb_id);
+                        client.sendEvent(1, 1, d.slice());
+                    }
+                    return;
+                },
                 6 => { // commit
                     if (surf.pending_buf) |pb| {
                         surf.buffer = pb;

@@ -165,35 +165,42 @@ pub const SurfaceManager = struct {
     /// src_pixels: píxeles del cliente (ARGB8888)
     /// dst: framebuffer del compositor
     pub fn blitSurface(
-        surface  : *Surface,
+        self     : *SurfaceManager,
+        surf     : *Surface,
         dst      : []u32,
         dst_w    : u32,
         dst_h    : u32,
         dst_pitch: u32,
     ) void {
-        const buf = surface.buffer orelse return;
+        _ = self;
+        const buf = surf.buffer orelse return;
         if (buf.data.len == 0) return;
+        if (buf.width <= 0 or buf.height <= 0 or buf.stride <= 0) return;
 
-        const src_pixels = @as([*]const u32, @ptrCast(@alignCast(buf.data.ptr)));
-        const src_stride = @as(u32, @intCast(buf.stride)) / 4;
+        const sw: u32 = @intCast(buf.width);
+        const sh: u32 = @intCast(buf.height);
+        const src_stride: u32 = @intCast(@divTrunc(buf.stride, 4));
+        const npixels: usize = buf.data.len / 4;
+        if (npixels == 0) return;
+        const src = @as([*]const u32, @ptrCast(@alignCast(buf.data.ptr)))[0..npixels];
 
-        const x0: u32 = @intCast(@max(0, surface.x));
-        const y0: u32 = @intCast(@max(0, surface.y));
-        const x1: u32 = @min(x0 + @as(u32, @intCast(buf.width)),  dst_w);
-        const y1: u32 = @min(y0 + @as(u32, @intCast(buf.height)), dst_h);
+        const x0: u32 = if (surf.x >= 0) @intCast(surf.x) else 0;
+        const y0: u32 = if (surf.y >= 0) @intCast(surf.y) else 0;
+        const x1: u32 = @min(x0 + sw, dst_w);
+        const y1: u32 = @min(y0 + sh, dst_h);
+        const dp: u32 = dst_pitch / 4;
 
         var dy: u32 = y0;
         while (dy < y1) : (dy += 1) {
-            const sy = dy - y0;
+            const sy: u32 = dy - y0;
             var dx: u32 = x0;
             while (dx < x1) : (dx += 1) {
-                const sx = dx - x0;
-                const idx = sy * src_stride + sx;
-                if (idx >= buf.data.len / 4) continue;
-                const pixel = src_pixels[idx];
-                // Copiar píxel directo (XRGB8888 no usa alpha)
-                dst[dy * (dst_pitch / 4) + dx] = pixel | 0xFF000000;
+                const sx: u32 = dx - x0;
+                const si: usize = sy * src_stride + sx;
+                const di: usize = dy * dp + dx;
+                if (si >= src.len or di >= dst.len) continue;
+                dst[di] = src[si] | 0xFF000000;
             }
-        }
+    }
     }
 };
