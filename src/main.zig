@@ -132,7 +132,7 @@ pub fn main() !void {
         // ── Wayland: siempre procesar, independiente del redraw ───────────
         if (wl_server) |*s| {
             s.poll();
-            if (s.surfaces.count > 0) dirty = true;
+            if (wl_server) |*srv2| { _ = srv2; dirty = true; }
         }
 
         // ── Render ───────────────────────────────────────────────────────
