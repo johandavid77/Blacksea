@@ -31,6 +31,12 @@ fn bsLog(comptime level: std.log.Level, comptime fmt: []const u8, args: anytype)
 }
 
 pub fn main() !void {
+    // Ignorar SIGBUS via syscall directo
+    const SIG_IGN: usize = 1;
+    const SIGBUS: usize = 7;
+    var sa_buf: [152]u8 = std.mem.zeroes([152]u8);
+    std.mem.writeInt(usize, sa_buf[0..8], SIG_IGN, .little);
+    _ = std.os.linux.syscall4(.rt_sigaction, SIGBUS, @intFromPtr(&sa_buf), 0, 8);
     var da = std.heap.DebugAllocator(.{}){};
     defer _ = da.deinit();
     const allocator = da.allocator();
@@ -157,10 +163,33 @@ fn drawFrame(output: *drm.Output, mode: LayoutMode, cx: u32, cy: u32) void {
     }
 }
 
+var back_pixels: [1280 * 800]u32 = std.mem.zeroes([1280 * 800]u32);
+
 fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
     const fb = output.drawBuffer();
+    // Render al back buffer en RAM — no tocar fb.data todavía
+    const n = @min(back_pixels.len, fb.data.len);
+    @memset(back_pixels[0..n], 0);
     for (&surfaces.surfaces) |*surf| {
         if (surf.id == 0 or !surf.mapped) continue;
-        surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
+        // Verificar que el buffer sigue siendo válido
+        if (surf.buffer) |buf| {
+            if (buf.fd < 0 or buf.data.len == 0) {
+                surf.mapped = false;
+                continue;
+            }
+            // Test de acceso seguro: verificar que el fd sigue abierto
+            const rc = linux.syscall2(.fstat, @intCast(buf.fd), 0);
+            if (@as(isize, @bitCast(rc)) < 0) {
+                surf.mapped = false;
+                buf.fd = -1;
+                buf.data = &.{};
+                continue;
+            }
+        }
+        surfaces.blitSurface(surf, back_pixels[0..fb.data.len], @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
     }
+    // Copiar back buffer al framebuffer via write() — evita SIGBUS del mmap
+    const fb_bytes = std.mem.sliceAsBytes(back_pixels[0..n]);
+    _ = linux.pwrite(@intCast(output.fd), fb_bytes.ptr, fb_bytes.len, 0);
 }

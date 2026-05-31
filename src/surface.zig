@@ -181,6 +181,9 @@ pub const SurfaceManager = struct {
     ) void {
         _ = self;
         const buf = surf.buffer orelse return;
+        // Validar posición de superficie
+        if (surf.x < 0 or surf.y < 0) return;
+        if (@as(u32, @intCast(surf.x)) >= dst_w or @as(u32, @intCast(surf.y)) >= dst_h) return;
         if (buf.data.len == 0) return;
         if (buf.width <= 0 or buf.height <= 0 or buf.stride <= 0) return;
 
