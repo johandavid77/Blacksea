@@ -464,8 +464,13 @@ pub const Server = struct {
                         }
                     }
                 },
-                else => {},
+                else => {}, // ignorar set_min_size, set_max_size, etc
             }
+            return;
+        }
+
+        // wl_buffer.destroy — ignorar silenciosamente
+        if (self.surfaces.getBuffer(object_id) != null and opcode == 0) {
             return;
         }
 
@@ -504,6 +509,7 @@ pub const Server = struct {
             }
             return;
         }
+        // Mensaje desconocido — ignorar
     }
 
     pub fn deinit(self: *Server) void {

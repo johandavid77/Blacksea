@@ -112,29 +112,32 @@ pub const SurfaceManager = struct {
     }
 
     pub fn createBuffer(
-        self   : *SurfaceManager,
-        id     : u32,
-        fd     : i32,
-        width  : i32,
-        height : i32,
-        stride : i32,
-        format : u32,
+        self    : *SurfaceManager,
+        id      : u32,
+        fd      : i32,
+        width   : i32,
+        height  : i32,
+        stride  : i32,
+        format  : u32,
         offset  : i32,
     ) ?*Buffer {
         for (&self.buffers) |*b| {
             if (b.fd == -1) {
                 const size: usize = @intCast(stride * height);
-                // mmap del fd del cliente para leer sus píxeles
-                const ptr = std.posix.mmap(
-                    null, size,
+                const off: usize = @intCast(offset);
+                const map_total: usize = off + size;
+                std.log.info("mmap: fd={} off={} size={} total={}", .{fd, off, size, map_total});
+                const base = std.posix.mmap(
+                    null, map_total,
                     std.posix.PROT{ .READ = true },
                     .{ .TYPE = .SHARED },
-                    fd, @intCast(offset),
-                ) catch {
-                    std.log.err("surface: mmap buffer falló", .{});
+                    fd, 0,
+                ) catch |err| {
+                    std.log.err("mmap falló: {}", .{err});
                     _ = linux.close(@intCast(fd));
                     return null;
                 };
+                const ptr = base[off..];
                 b.* = Buffer{
                     .id     = id,
                     .fd     = fd,
@@ -185,7 +188,9 @@ pub const SurfaceManager = struct {
             var dx: u32 = x0;
             while (dx < x1) : (dx += 1) {
                 const sx = dx - x0;
-                const pixel = src_pixels[sy * src_stride + sx];
+                const idx = sy * src_stride + sx;
+                if (idx >= buf.data.len / 4) continue;
+                const pixel = src_pixels[idx];
                 // Copiar píxel directo (XRGB8888 no usa alpha)
                 dst[dy * (dst_pitch / 4) + dx] = pixel | 0xFF000000;
             }
