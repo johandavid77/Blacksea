@@ -156,7 +156,10 @@ pub fn main() !void {
 }
 
 fn drawFrame(output: *drm.Output, mode: LayoutMode, cx: u32, cy: u32) void {
-    const fb = output.drawBuffer();
+    const real_fb = output.drawBuffer();
+    var fake_fb = real_fb.*;
+    fake_fb.data = back_pixels[0..real_fb.data.len];
+    const fb = &fake_fb;
     fb.clear(Colors.background);
     fb.fillRect(0, 0, output.width, 32, Colors.surface);
     fb.fillRect(0, 32, output.width, 1, Colors.accent);
@@ -173,9 +176,8 @@ var g_start_ms: u64 = 0;
 
 fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
     const fb = output.drawBuffer();
-    // Fondo en back_pixels (no tocar fb.data)
+    // back_pixels ya tiene el fondo de drawFrame
     const n = @min(back_pixels.len, fb.data.len);
-    @memset(back_pixels[0..n], 0);
     for (&surfaces.surfaces) |*surf| {
         if (surf.id == 0 or !surf.mapped) continue;
         // Verificar buffer válido
