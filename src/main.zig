@@ -31,16 +31,12 @@ fn bsLog(comptime level: std.log.Level, comptime fmt: []const u8, args: anytype)
 }
 
 pub fn main() !void {
-    // Ignorar SIGBUS con SA_RESETHAND=0
-    var sa: [152]u8 = std.mem.zeroes([152]u8);
-    std.mem.writeInt(usize, sa[0..8], 1, .little); // SIG_IGN
-    _ = linux.syscall4(.rt_sigaction, 7, @intFromPtr(&sa), 0, 8); // SIGBUS=7
-    // Ignorar SIGBUS via syscall directo
-    const SIG_IGN: usize = 1;
-    const SIGBUS: usize = 7;
-    var sa_buf: [152]u8 = std.mem.zeroes([152]u8);
-    std.mem.writeInt(usize, sa_buf[0..8], SIG_IGN, .little);
-    _ = std.os.linux.syscall4(.rt_sigaction, SIGBUS, @intFromPtr(&sa_buf), 0, 8);
+    // SIGBUS + SIGSEGV handler — ignorar
+    var sa = std.mem.zeroes([32]usize);
+    sa[0] = 1; // SIG_IGN
+    _ = linux.syscall4(.rt_sigaction, 7, @intFromPtr(&sa), 0, 8);  // SIGBUS
+    _ = linux.syscall4(.rt_sigaction, 11, @intFromPtr(&sa), 0, 8); // SIGSEGV
+
     var da = std.heap.DebugAllocator(.{}){};
     defer _ = da.deinit();
     const allocator = da.allocator();
@@ -179,12 +175,22 @@ fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
     // back_pixels ya tiene el fondo de drawFrame
     const n = @min(back_pixels.len, fb.data.len);
     for (&surfaces.surfaces) |*surf| {
+        std.log.info("check surf {} mapped={} buf={}", .{surf.id, surf.mapped, surf.buffer != null});
         if (surf.id == 0 or !surf.mapped) continue;
+        std.log.info("blit surf {} {}x{} buf={}", .{surf.id, surf.width, surf.height, surf.buffer != null});
         // Verificar buffer válido
         if (surf.buffer == null) continue;
         if (surf.buffer.?.fd < 0 or surf.buffer.?.data.len == 0) continue;
         surfaces.blitSurface(surf, back_pixels[0..fb.data.len], @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
     }
-    // Copiar back buffer al framebuffer
-    @memcpy(fb.data[0..n], back_pixels[0..n]);
+    // Escribir back_pixels al fb0 via write() — sin tocar fb.data
+    const bytes = std.mem.sliceAsBytes(back_pixels[0..n]);
+    _ = linux.lseek(@intCast(output.fd_write), 0, linux.SEEK.SET);
+    var off2: usize = 0;
+    while (off2 < bytes.len) {
+        const r = linux.write(@intCast(output.fd_write), bytes.ptr + off2, bytes.len - off2);
+        const written = @as(isize, @bitCast(r));
+        if (written <= 0) break;
+        off2 += @intCast(written);
+    }
 }

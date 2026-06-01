@@ -122,32 +122,31 @@ pub const SurfaceManager = struct {
         offset  : i32,
     ) ?*Buffer {
         for (&self.buffers) |*b| {
-            if (b.id == id and b.fd >= 0) {
+            if (b.id == id and b.fd == -1) { // slot para reusar
                 // Reusar slot — desmapear el mmap anterior
                 if (b.data.len > 0) std.posix.munmap(@alignCast(b.data));
                 b.fd = -1;
             }
         }
         for (&self.buffers) |*b| {
-            if (b.fd == -1) {
+            if (b.fd == -1 and b.id == 0) { // slot vacío
                 const size: usize = @intCast(stride * height);
                 const off: usize = @intCast(offset);
-                const map_total: usize = off + size;
-                std.log.info("mmap: fd={} off={} size={} total={}", .{fd, off, size, map_total});
-                const base = std.posix.mmap(
-                    null, map_total,
-                    std.posix.PROT{ .READ = true },
-                    .{ .TYPE = .SHARED },
-                    fd, 0,
-                ) catch |err| {
-                    std.log.err("mmap falló: {}", .{err});
-                    _ = linux.close(@intCast(fd));
-                    return null;
-                };
-                const ptr = base[off..];
+            _ = off + size; // map_total no usado
+            // pread a buffer propio — evita SIGBUS cuando foot muere
+            const buf_mem = std.heap.page_allocator.alloc(u8, size) catch return null;
+            // Validar offset razonable (< 64MB)
+            if (off > 64 * 1024 * 1024) { std.heap.page_allocator.free(buf_mem); return null; }
+            const nread = linux.pread(@intCast(fd), buf_mem.ptr, size, @intCast(off));
+            if (@as(isize, @bitCast(nread)) <= 0) {
+                std.heap.page_allocator.free(buf_mem);
+                return null;
+            }
+            // NO cerrar fd — pertenece al shm pool del cliente
+            const ptr = buf_mem;
                 b.* = Buffer{
                     .id     = id,
-                    .fd     = fd,
+                    .fd     = -1,
                     .data   = ptr,
                     .width  = width,
                     .height = height,
@@ -163,7 +162,7 @@ pub const SurfaceManager = struct {
 
     pub fn getBuffer(self: *SurfaceManager, id: u32) ?*Buffer {
         for (&self.buffers) |*b| {
-            if (b.fd >= 0 and b.id == id) return b;
+            if (b.id == id and b.id > 0) return b; // fd puede ser -1 con pread
         }
         return null;
     }
@@ -187,11 +186,6 @@ pub const SurfaceManager = struct {
         if (buf.width <= 0 or buf.height <= 0 or buf.stride <= 0) return;
         // Verificar que el fd del buffer sigue abierto
         if (buf.fd < 0) return;
-        var fdpath: [48]u8 = undefined;
-        const fdstr = std.fmt.bufPrint(&fdpath, "/proc/self/fd/{}", .{buf.fd}) catch return;
-        const acc = linux.syscall4(.faccessat, @as(usize, @bitCast(@as(isize, -100))), @intFromPtr(fdstr.ptr), 4, 0);
-        if (@as(isize, @bitCast(acc)) != 0) { surf.buffer = null; return; }
-
         const sw: u32 = @intCast(buf.width);
         const sh: u32 = @intCast(buf.height);
         const src_stride: u32 = @intCast(@divTrunc(buf.stride, 4));
