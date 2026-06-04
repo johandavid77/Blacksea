@@ -14,6 +14,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // Lua 5.5 para configuración
+    exe.root_module.linkSystemLibrary("lua++", .{});
     b.installArtifact(exe);
 
     const run_cmd  = b.addRunArtifact(exe);

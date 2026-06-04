@@ -1,4 +1,5 @@
 const std = @import("std");
+const config_mod = @import("config.zig");
 const linux = std.os.linux;
 const drm = @import("drm.zig");
 const evdev = @import("evdev.zig");

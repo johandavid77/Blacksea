@@ -1,0 +1,43 @@
+//! config.zig — Configuración de Blacksea via Lua
+const std = @import("std");
+const c = @cImport({
+    @cInclude("lua.h");
+    @cInclude("lualib.h");
+    @cInclude("lauxlib.h");
+});
+
+pub const Config = struct {
+    border_width:  u32  = 2,
+    border_color:  u32  = 0xFF4A90D9,
+    gap:           u32  = 8,
+    mod_key:       []const u8 = "super",
+
+    pub fn load(self: *Config, path: []const u8) !void {
+        const L = c.luaL_newstate() orelse return error.LuaInit;
+        defer c.lua_close(L);
+        c.luaL_openlibs(L);
+
+        var buf: [256]u8 = undefined;
+        const cpath = try std.fmt.bufPrintZ(&buf, "{s}", .{path});
+
+        if (c.luaL_dofile(L, cpath.ptr) != 0) {
+            const err = c.lua_tostring(L, -1);
+            std.log.warn("config error: {s}", .{err});
+            return; // usar defaults
+        }
+
+        // border_width
+        _ = c.lua_getglobal(L, "border_width");
+        if (c.lua_isnumber(L, -1) != 0)
+            self.border_width = @intCast(c.lua_tointeger(L, -1));
+        c.lua_pop(L, 1);
+
+        // gap
+        _ = c.lua_getglobal(L, "gap");
+        if (c.lua_isnumber(L, -1) != 0)
+            self.gap = @intCast(c.lua_tointeger(L, -1));
+        c.lua_pop(L, 1);
+
+        std.log.info("config: border={} gap={}", .{self.border_width, self.gap});
+    }
+};
