@@ -54,6 +54,8 @@ pub const Surface = struct {
     height      : i32 = 0,
     mapped      : bool = false,      // visible en pantalla
     keyboard_entered : bool = false,
+    last_tiled_w  : i32 = 0,
+    last_tiled_h  : i32 = 0,
 
     // xdg_surface/xdg_toplevel IDs asociados
     xdg_surface_id  : u32 = 0,

@@ -1,4 +1,5 @@
 const std = @import("std");
+const xdg_shell = @import("xdg_shell.zig");
 const config_mod = @import("config.zig");
 const linux = std.os.linux;
 const drm = @import("drm.zig");
@@ -87,7 +88,7 @@ pub fn main() !void {
     bsLog(.info, "corriendo — Super+Q=salir  Super+Space=layout", .{});
 
     var running    = true;
-    var mode       : LayoutMode = .scrolling;
+    var mode      : LayoutMode = .scrolling;
     var cursor_x   : i32 = @intCast(output.width  / 2);
     var cursor_y   : i32 = @intCast(output.height / 2);
     var dirty      = false;
@@ -189,14 +190,14 @@ fn applyTiling(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
     // Contar ventanas mapeadas con xdg_toplevel
     var count: u32 = 0;
     for (&surfaces.surfaces) |*s| {
-        if (s.mapped and s.xdg_toplevel_id != 0) count += 1;
+        if (s.mapped and s.buffer != null) count += 1;
     }
     if (count == 0) return;
 
     const gap: i32 = 6;
     var idx: u32 = 0;
     for (&surfaces.surfaces) |*s| {
-        if (!s.mapped or s.xdg_toplevel_id == 0) continue;
+        if (!s.mapped or s.buffer == null) continue;
         if (count == 1) {
             s.x = gap;
             s.y = bar + gap;
@@ -218,6 +219,7 @@ fn applyTiling(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
             s.width  = @divTrunc(W, 2) - gap - @divTrunc(gap, 2);
             s.height = slot_h;
         }
+        // configure se enviará en versión futura
         idx += 1;
     }
 }
