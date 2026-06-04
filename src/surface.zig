@@ -24,24 +24,22 @@ pub const WL_SHM_FORMAT_XRGB8888: u32 = 1;
 pub const Buffer = struct {
     id     : u32,
     fd     : i32,
-    data   : []u8,    // mmap del fd del cliente
+    data   : []u8,
     width  : i32,
     height : i32,
     stride : i32,
     format : u32,
-    busy   : bool = false,  // true = siendo mostrado
-
-    pub fn destroy(self: *Buffer) void {
-        if (self.data.len > 0) {
-            std.posix.munmap(@alignCast(self.data));
-        }
-        if (self.fd >= 0) {
-            _ = linux.close(@intCast(self.fd));
-        }
-        self.* = std.mem.zeroes(Buffer);
-        self.fd = -1;
-    }
+    offset : usize = 0,
+    busy   : bool = false,
 };
+
+pub fn bufferDestroy(self: *Buffer) void {
+    if (self.data.len > 0) std.heap.page_allocator.free(self.data);
+    // NO cerrar fd — pertenece al shm pool del cliente
+    self.* = std.mem.zeroes(Buffer);
+    self.fd = -1;
+}
+
 
 // ─── Superficie ───────────────────────────────────────────────────────────────
 
@@ -55,6 +53,7 @@ pub const Surface = struct {
     width       : i32 = 0,
     height      : i32 = 0,
     mapped      : bool = false,      // visible en pantalla
+    keyboard_entered : bool = false,
 
     // xdg_surface/xdg_toplevel IDs asociados
     xdg_surface_id  : u32 = 0,
@@ -124,7 +123,7 @@ pub const SurfaceManager = struct {
         for (&self.buffers) |*b| {
             if (b.id == id and b.fd == -1) { // slot para reusar
                 // Reusar slot — desmapear el mmap anterior
-                if (b.data.len > 0) std.posix.munmap(@alignCast(b.data));
+                if (b.data.len > 0) std.heap.page_allocator.free(b.data);
                 b.fd = -1;
             }
         }
@@ -133,20 +132,14 @@ pub const SurfaceManager = struct {
                 const size: usize = @intCast(stride * height);
                 const off: usize = @intCast(offset);
             _ = off + size; // map_total no usado
-            // pread a buffer propio — evita SIGBUS cuando foot muere
+            // Guardar fd y offset — leeremos en blitSurface cuando foot haya pintado
             const buf_mem = std.heap.page_allocator.alloc(u8, size) catch return null;
-            // Validar offset razonable (< 64MB)
-            if (off > 64 * 1024 * 1024) { std.heap.page_allocator.free(buf_mem); return null; }
-            const nread = linux.pread(@intCast(fd), buf_mem.ptr, size, @intCast(off));
-            if (@as(isize, @bitCast(nread)) <= 0) {
-                std.heap.page_allocator.free(buf_mem);
-                return null;
-            }
-            // NO cerrar fd — pertenece al shm pool del cliente
+            @memset(buf_mem, 0);
             const ptr = buf_mem;
                 b.* = Buffer{
                     .id     = id,
-                    .fd     = -1,
+                    .fd     = fd,
+                .offset = off,
                     .data   = ptr,
                     .width  = width,
                     .height = height,
@@ -184,6 +177,12 @@ pub const SurfaceManager = struct {
         if (surf.x >= @as(i32, @intCast(dst_w)) or surf.y >= @as(i32, @intCast(dst_h))) return;
         if (buf.data.len == 0) return;
         if (buf.width <= 0 or buf.height <= 0 or buf.stride <= 0) return;
+        // Leer datos frescos via pread
+        if (buf.fd >= 0 and buf.data.len > 0) {
+            const nr = linux.pread(@intCast(buf.fd), buf.data.ptr, buf.data.len, @intCast(buf.offset));
+            const nri = @as(isize, @bitCast(nr));
+            if (surf.id == 3) std.log.info("pread surf3 fd={} off={} len={} nr={} b0={x}", .{buf.fd, buf.offset, buf.data.len, nri, buf.data[0]});
+        }
         // Verificar que el fd del buffer sigue abierto
         if (buf.fd < 0) return;
         const sw: u32 = @intCast(buf.width);
@@ -195,6 +194,7 @@ pub const SurfaceManager = struct {
 
         const x0: u32 = if (surf.x >= 0) @intCast(surf.x) else 0;
         const y0: u32 = if (surf.y >= 0) @intCast(surf.y) else 0;
+        if (surf.id == 3) std.log.info("blit surf3 x={} y={} sw={} sh={} x0={} y0={}", .{surf.x, surf.y, sw, sh, x0, y0});
         const x1: u32 = @min(x0 + sw, dst_w);
         const y1: u32 = @min(y0 + sh, dst_h);
         const dp: u32 = dst_pitch / 4;

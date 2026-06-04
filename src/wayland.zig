@@ -46,6 +46,10 @@ pub const Client = struct {
     seat_id      : u32 = 0,
     pool_id      : u32 = 0,
     pool_fd      : i32 = -1,
+    pool_map      : []u8 = &[_]u8{},
+    pool_size     : usize = 0,
+    fd_queue      : [8]i32 = [_]i32{-1} ** 8,
+    fd_queue_len  : usize = 0,
     pool_ids     : [8]u32 = std.mem.zeroes([8]u32),
     pool_count   : usize = 0,
     xdg_surface_ids: [8]u32 = std.mem.zeroes([8]u32),
@@ -221,9 +225,19 @@ pub const Server = struct {
             if (rmsg_main.controllen >= @sizeOf(linux.cmsghdr)) {
                 const cm: *linux.cmsghdr = @ptrCast(@alignCast(&cmsg_main));
                 if (cm.level == linux.SOL.SOCKET and cm.type == 1) {
-                    const sfd: *i32 = @ptrCast(@alignCast(&cmsg_main[@sizeOf(linux.cmsghdr)]));
-                    client.pool_fd = sfd.*;
-                    std.log.info("SCM_RIGHTS(poll): shm_fd={}", .{sfd.*});
+                    const data_len = cm.len - @sizeOf(linux.cmsghdr);
+                    const n_fds = data_len / @sizeOf(i32);
+                    var fi: usize = 0;
+                    while (fi < n_fds) : (fi += 1) {
+                        const off = @sizeOf(linux.cmsghdr) + fi * @sizeOf(i32);
+                        const sfd: *i32 = @ptrCast(@alignCast(&cmsg_main[off]));
+                        if (client.fd_queue_len < 8) {
+                            client.fd_queue[client.fd_queue_len] = sfd.*;
+                            client.fd_queue_len += 1;
+                        }
+                        client.pool_fd = sfd.*;
+                        std.log.info("SCM_RIGHTS: fd={}", .{sfd.*});
+                    }
                 }
             }
             const bytes: isize = @bitCast(n);
@@ -334,13 +348,27 @@ pub const Server = struct {
             var path: [32:0]u8 = std.mem.zeroes([32:0]u8);
             _ = std.fmt.bufPrint(&path, "/tmp/bs_buf", .{}) catch {};
             // Usar SCM_RIGHTS fd si ya lo recibimos, sino abrir archivo
-            var file_fd: i32 = client.pool_fd;
+            // Sacar el primer fd de la cola
+            var file_fd: i32 = -1;
+            if (client.fd_queue_len > 0) {
+                file_fd = client.fd_queue[0];
+                // Shift queue
+                var qi: usize = 0;
+                while (qi + 1 < client.fd_queue_len) : (qi += 1) client.fd_queue[qi] = client.fd_queue[qi+1];
+                client.fd_queue[client.fd_queue_len-1] = -1;
+                client.fd_queue_len -= 1;
+            } else file_fd = client.pool_fd;
             if (file_fd < 0) {
                 const file_rc = linux.open(&path, .{ .ACCMODE = .RDONLY }, 0);
                 file_fd = @bitCast(@as(u32, @truncate(file_rc)));
             }
-            std.log.info("create_pool id={} size={} pool_fd={}", .{pool_id, size, file_fd});
+                const real_sz = linux.lseek(@intCast(file_fd), 0, linux.SEEK.END);
+                _ = linux.lseek(@intCast(file_fd), 0, linux.SEEK.SET);
+            std.log.info("create_pool id={} size={} pool_fd={} real={}", .{pool_id, size, file_fd, real_sz});
             client.pool_fd = file_fd;
+                if (client.pool_map.len > 0) std.posix.munmap(@alignCast(client.pool_map));
+                // Guardar fd y size del pool para pread en blitSurface
+                client.pool_size = @intCast(size);
             client.pool_id = pool_id;
             if (client.pool_count < 8) {
                 client.pool_ids[client.pool_count] = pool_id;
@@ -417,15 +445,26 @@ pub const Server = struct {
             const toplevel_id = readUint(payload, 0);
             // Encontrar la surface asociada a este xdg_surface
             var surf_id: u32 = 0;
-            // Buscar en el orden de creación — el xdg_surface envuelve la surface
+            // Buscar surf_id buscando la surface con menor id (la principal)
+            var min_id: u32 = 0xFFFFFFFF;
             for (self.surfaces.surfaces) |s| {
-                if (s.id > 0 and s.client_fd == client.fd) { surf_id = s.id; break; }
+                if (s.id > 0 and s.client_fd == client.fd and s.id < min_id) min_id = s.id;
             }
+            if (min_id < 0xFFFFFFFF) surf_id = min_id;
             _ = self.xdg.createToplevel(toplevel_id, object_id, surf_id, client.fd);
             // Enviar toplevel configure + xdg_surface configure
             xdg_mod.sendToplevelConfigure(client.fd, toplevel_id, 1280, 768);
             self.serial += 1;
             xdg_mod.sendXdgSurfaceConfigure(client.fd, object_id, self.serial);
+                // Keyboard enter al crear toplevel
+                if (client.keyboard_id > 0 and surf_id > 0) {
+                    self.serial += 1;
+                    seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, surf_id, self.serial);
+                    seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
+                    for (&self.surfaces.surfaces) |*s| {
+                        if (s.id == surf_id) { s.keyboard_entered = true; break; }
+                    }
+                }
             return;
         }
 
@@ -487,7 +526,11 @@ pub const Server = struct {
                         const cb_id = readUint(payload, 0);
                         // Enviar wl_callback.done inmediatamente
                         var b = MsgBuf{};
-                        b.uint(0); // timestamp ms
+                        // Timestamp relativo via clock_gettime
+                    var _ts: linux.timespec = undefined;
+                    _ = linux.clock_gettime(linux.CLOCK.MONOTONIC, &_ts);
+                    const _ms: u32 = @truncate(@as(u64, @intCast(_ts.sec)) * 1000 + @as(u64, @intCast(_ts.nsec)) / 1_000_000);
+                    b.uint(_ms);
                         client.sendEvent(cb_id, 0, b.slice());
                     }
                     return;
@@ -497,11 +540,9 @@ pub const Server = struct {
                         // Liberar buffer anterior si existe
                         if (surf.buffer) |old_buf| {
                             if (old_buf != pb) {
-                                var rel: [8]u8 = undefined;
-                                std.mem.writeInt(u32, rel[0..4], old_buf.id, .little);
-                                std.mem.writeInt(u32, rel[4..8], (8 << 16) | 0, .little);
-                                _ = linux.sendto(@intCast(client.fd), &rel, rel.len, linux.MSG.NOSIGNAL, null, 0);
-                                old_buf.fd = -1; // marcar slot libre
+                        // No enviar wl_buffer.release — foot lo destruye solo
+                        if (old_buf.data.len > 0) std.heap.page_allocator.free(old_buf.data);
+                        old_buf.* = std.mem.zeroes(surface_mod.Buffer);
                             }
                         }
                         surf.buffer = pb;
@@ -511,12 +552,13 @@ pub const Server = struct {
                         surf.pending_buf = null;
                         std.log.info("surface {} commit {}x{}", .{object_id, pb.width, pb.height});
                         // Solo ventanas con toplevel reciben foco de teclado
-                        if (client.keyboard_id > 0 and !surf.mapped and surf.xdg_toplevel_id > 0) {
+                        if (client.keyboard_id > 0 and !surf.keyboard_entered and surf.xdg_toplevel_id > 0) {
                             self.serial += 1;
                             seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, object_id, self.serial);
-                            seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
-                        }
-                    }
+                    surf.keyboard_entered = true;
+                    seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
+                }
+            }
                 },
                 else => {},
             }

@@ -34,8 +34,6 @@ pub fn main() !void {
     // SIGBUS + SIGSEGV handler — ignorar
     var sa = std.mem.zeroes([32]usize);
     sa[0] = 1; // SIG_IGN
-    _ = linux.syscall4(.rt_sigaction, 7, @intFromPtr(&sa), 0, 8);  // SIGBUS
-    _ = linux.syscall4(.rt_sigaction, 11, @intFromPtr(&sa), 0, 8); // SIGSEGV
 
     var da = std.heap.DebugAllocator(.{}){};
     defer _ = da.deinit();
@@ -112,7 +110,7 @@ pub fn main() !void {
                                 _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
                                 const abs_ms: u64 = @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / 1_000_000;
                                 const now_ms: u32 = @truncate(abs_ms - g_start_ms);
-                                seat_mod.sendKey(cl.fd, cl.keyboard_id, srv.serial, now_ms, ev.code, key_state);
+                                seat_mod.sendKey(cl.fd, cl.keyboard_id, srv.serial, now_ms, ev.code + 8, key_state); // evdev+8 = XKB keycode
                                 dirty = true;
                                 break;
                             }
@@ -154,7 +152,7 @@ pub fn main() !void {
 fn drawFrame(output: *drm.Output, mode: LayoutMode, cx: u32, cy: u32) void {
     const real_fb = output.drawBuffer();
     var fake_fb = real_fb.*;
-    fake_fb.data = back_pixels[0..real_fb.data.len];
+        fake_fb.data = real_fb.data;
     const fb = &fake_fb;
     fb.clear(Colors.background);
     fb.fillRect(0, 0, output.width, 32, Colors.surface);
@@ -173,7 +171,7 @@ var g_start_ms: u64 = 0;
 fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
     const fb = output.drawBuffer();
     // back_pixels ya tiene el fondo de drawFrame
-    const n = @min(back_pixels.len, fb.data.len);
+    _ = @min(back_pixels.len, fb.data.len);
     for (&surfaces.surfaces) |*surf| {
         std.log.info("check surf {} mapped={} buf={}", .{surf.id, surf.mapped, surf.buffer != null});
         if (surf.id == 0 or !surf.mapped) continue;
@@ -181,16 +179,6 @@ fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
         // Verificar buffer válido
         if (surf.buffer == null) continue;
         if (surf.buffer.?.fd < 0 or surf.buffer.?.data.len == 0) continue;
-        surfaces.blitSurface(surf, back_pixels[0..fb.data.len], @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
-    }
-    // Escribir back_pixels al fb0 via write() — sin tocar fb.data
-    const bytes = std.mem.sliceAsBytes(back_pixels[0..n]);
-    _ = linux.lseek(@intCast(output.fd_write), 0, linux.SEEK.SET);
-    var off2: usize = 0;
-    while (off2 < bytes.len) {
-        const r = linux.write(@intCast(output.fd_write), bytes.ptr + off2, bytes.len - off2);
-        const written = @as(isize, @bitCast(r));
-        if (written <= 0) break;
-        off2 += @intCast(written);
+        surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
     }
 }
