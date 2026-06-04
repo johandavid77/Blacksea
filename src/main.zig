@@ -149,7 +149,7 @@ pub fn main() !void {
         // ── Render ───────────────────────────────────────────────────────
         if (dirty) {
             drawFrame(output, mode, @intCast(cursor_x), @intCast(cursor_y));
-            if (wl_server) |*s| blitSurfaces(output, &s.surfaces);
+            if (wl_server) |*s| blitSurfaces(output, &s.surfaces, mode);
             try output.pageFlip(device.fd);
             dirty = false;
         }
@@ -180,7 +180,51 @@ fn drawFrame(output: *drm.Output, mode: LayoutMode, cx: u32, cy: u32) void {
 var back_pixels: [1280 * 800]u32 = std.mem.zeroes([1280 * 800]u32);
 var g_start_ms: u64 = 0;
 
-fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
+
+fn applyTiling(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
+    const W: i32 = @intCast(output.width);
+    const H: i32 = @intCast(output.height);
+    const bar: i32 = 33; // altura barra superior
+
+    // Contar ventanas mapeadas con xdg_toplevel
+    var count: u32 = 0;
+    for (&surfaces.surfaces) |*s| {
+        if (s.mapped and s.xdg_toplevel_id != 0) count += 1;
+    }
+    if (count == 0) return;
+
+    const gap: i32 = 6;
+    var idx: u32 = 0;
+    for (&surfaces.surfaces) |*s| {
+        if (!s.mapped or s.xdg_toplevel_id == 0) continue;
+        if (count == 1) {
+            s.x = gap;
+            s.y = bar + gap;
+            s.width  = W - gap * 2;
+            s.height = H - bar - gap * 2;
+        } else if (idx == 0) {
+            // Master: mitad izquierda
+            s.x = gap;
+            s.y = bar + gap;
+            s.width  = @divTrunc(W, 2) - gap - @divTrunc(gap, 2);
+            s.height = H - bar - gap * 2;
+        } else {
+            // Stack: mitad derecha, dividida verticalmente
+            const stack_count: i32 = @intCast(count - 1);
+            const slot_h = @divTrunc(H - bar - gap * (stack_count + 1), stack_count);
+            const slot_idx: i32 = @intCast(idx - 1);
+            s.x = @divTrunc(W, 2) + @divTrunc(gap, 2);
+            s.y = bar + gap + slot_idx * (slot_h + gap);
+            s.width  = @divTrunc(W, 2) - gap - @divTrunc(gap, 2);
+            s.height = slot_h;
+        }
+        idx += 1;
+    }
+}
+
+fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager, mode: LayoutMode) void {
+    // Aplicar layout tiling si está activo
+    if (mode == .tiling) applyTiling(output, surfaces);
     const fb = output.drawBuffer();
     // back_pixels ya tiene el fondo de drawFrame
     _ = @min(back_pixels.len, fb.data.len);
