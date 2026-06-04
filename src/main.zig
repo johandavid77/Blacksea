@@ -72,6 +72,17 @@ pub fn main() !void {
     drawFrame(output, .scrolling, output.width / 2, output.height / 2);
     try output.pageFlip(device.fd);
 
+    // Hilo dedicado al display (SET_CRTC no-bloqueante)
+    const flip_thread = try std.Thread.spawn(.{}, struct {
+        fn run(out: *drm.Output) void {
+            while (true) {
+                out.doFlip();
+                _ = linux.nanosleep(&.{ .sec = 0, .nsec = 16_000_000 }, null); // ~60fps
+            }
+        }
+    }.run, .{output});
+    flip_thread.detach();
+
     bsLog(.info, "corriendo — Super+Q=salir  Super+Space=layout", .{});
 
     var running    = true;
