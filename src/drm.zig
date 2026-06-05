@@ -178,24 +178,18 @@ pub const Output = struct {
     pub fn drawBuffer(self: *Output) *Framebuffer { return &self.fb; }
 
     pub fn pageFlip(self: *Output, _: i32) !void {
-        self.pending_flip.store(true, .release);
-    }
-
-    pub fn doFlip(self: *Output) void {
-        if (!self.pending_flip.swap(false, .acq_rel)) return;
-        self.last_flip_ms += 1;
-        if (self.last_flip_ms % 2 != 0) return;
-        var flip_conn_id = self.connector_id;
+        var conn_id = self.connector_id;
         var crtc = DrmModeCrtc{
             .crtc_id            = self.crtc_id,
             .fb_id              = self.fb_id,
             .mode               = self.mode,
             .mode_valid         = 1,
             .count_connectors   = 1,
-            .set_connectors_ptr = @intFromPtr(&flip_conn_id),
+            .set_connectors_ptr = @intFromPtr(&conn_id),
         };
         drm_ioctl(self.fd, DRM_IOCTL_MODE_SETCRTC, &crtc) catch {};
     }
+
 };
 
 pub const Device = struct {

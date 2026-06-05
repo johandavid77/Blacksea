@@ -541,8 +541,8 @@ pub const Server = struct {
                         if (surf.buffer) |old_buf| {
                             if (old_buf != pb) {
                         // No enviar wl_buffer.release — foot lo destruye solo
-                        if (old_buf.data.len > 0) std.heap.page_allocator.free(old_buf.data);
-                        old_buf.* = std.mem.zeroes(surface_mod.Buffer);
+                    // buffer anterior liberado por el cliente via wl_buffer.destroy
+                    // old_buf.* = std.mem.zeroes(surface_mod.Buffer); // no zeroes
                             }
                         }
                         surf.buffer = pb;

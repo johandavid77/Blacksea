@@ -74,17 +74,6 @@ pub fn main() !void {
     drawFrame(output, .scrolling, output.width / 2, output.height / 2);
     try output.pageFlip(device.fd);
 
-    // Hilo dedicado al display (SET_CRTC no-bloqueante)
-    const flip_thread = try std.Thread.spawn(.{}, struct {
-        fn run(out: *drm.Output) void {
-            while (true) {
-                out.doFlip();
-                _ = linux.nanosleep(&.{ .sec = 0, .nsec = 16_000_000 }, null); // ~60fps
-            }
-        }
-    }.run, .{output});
-    flip_thread.detach();
-
     bsLog(.info, "corriendo — Super+Q=salir  Super+Space=layout", .{});
 
     var running    = true;
@@ -109,8 +98,8 @@ pub fn main() !void {
                         else => {},
                     }
                     if (p) {
-                        if (input.mods.super and ev.code == evdev.KEY_Q)     { running = false; break; }
-                        if (input.mods.super and ev.code == evdev.KEY_SPACE) { mode = mode.toggle(); dirty = true; }
+                        if (input.mods.ctrl and ev.code == evdev.KEY_Q)     { running = false; break; }
+                        if (input.mods.ctrl and ev.code == evdev.KEY_SPACE) { mode = mode.toggle(); dirty = true; }
                     }
                 // Reenviar tecla al cliente Wayland activo
                 if (wl_server) |*srv| {
@@ -225,18 +214,28 @@ fn applyTiling(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
 }
 
 fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager, mode: LayoutMode) void {
-    // Aplicar layout tiling si está activo
     if (mode == .tiling) applyTiling(output, surfaces);
     const fb = output.drawBuffer();
-    // back_pixels ya tiene el fondo de drawFrame
+    if (fb.data.len == 0) return;
     _ = @min(back_pixels.len, fb.data.len);
+    // Pasada 1: superficies con buffer grande (ventanas principales) primero
     for (&surfaces.surfaces) |*surf| {
-        std.log.info("check surf {} mapped={} buf={}", .{surf.id, surf.mapped, surf.buffer != null});
         if (surf.id == 0 or !surf.mapped) continue;
-        std.log.info("blit surf {} {}x{} buf={}", .{surf.id, surf.width, surf.height, surf.buffer != null});
-        // Verificar buffer válido
-        if (surf.buffer == null) continue;
-        if (surf.buffer.?.fd < 0 or surf.buffer.?.data.len == 0) continue;
+        const buf = surf.buffer orelse continue;
+        if (buf.fd < 0 or buf.data.len == 0) continue;
+        if (buf.width <= 0 or buf.height <= 0) continue;
+        const area: u64 = @as(u64, @intCast(buf.width)) * @as(u64, @intCast(@abs(buf.height)));
+        if (area < 100000) continue; // skip decoraciones pequeñas en pasada 1
+        surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
+    }
+    // Pasada 2: subsuperficies pequeñas (decoraciones CSD) encima
+    for (&surfaces.surfaces) |*surf| {
+        if (surf.id == 0 or !surf.mapped) continue;
+        const buf = surf.buffer orelse continue;
+        if (buf.fd < 0 or buf.data.len == 0) continue;
+        if (buf.width <= 0 or buf.height <= 0) continue;
+        const area: u64 = @as(u64, @intCast(buf.width)) * @as(u64, @intCast(@abs(buf.height)));
+        if (area >= 100000) continue; // ya blitadas en pasada 1
         surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
     }
 }

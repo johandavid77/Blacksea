@@ -183,7 +183,7 @@ pub const SurfaceManager = struct {
         if (buf.fd >= 0 and buf.data.len > 0) {
             const nr = linux.pread(@intCast(buf.fd), buf.data.ptr, buf.data.len, @intCast(buf.offset));
             const nri = @as(isize, @bitCast(nr));
-            if (surf.id == 3) std.log.info("pread surf3 fd={} off={} len={} nr={} b0={x}", .{buf.fd, buf.offset, buf.data.len, nri, buf.data[0]});
+        if (surf.id == 3) std.log.info("pread surf3 fd={} off={} len={} nr={} b0={x}", .{buf.fd, buf.offset, buf.data.len, nri, buf.data[0]});
         }
         // Verificar que el fd del buffer sigue abierto
         if (buf.fd < 0) return;
@@ -196,6 +196,9 @@ pub const SurfaceManager = struct {
 
         const x0: u32 = if (surf.x >= 0) @intCast(surf.x) else 0;
         const y0: u32 = if (surf.y >= 0) @intCast(surf.y) else 0;
+        // Filas/cols del source a saltar cuando la superficie tiene offset negativo
+        const src_skip_y: u32 = if (surf.y < 0) @intCast(-surf.y) else 0;
+        const src_skip_x: u32 = if (surf.x < 0) @intCast(-surf.x) else 0;
         if (surf.id == 3) std.log.info("blit surf3 x={} y={} sw={} sh={} x0={} y0={}", .{surf.x, surf.y, sw, sh, x0, y0});
         const x1: u32 = @min(x0 + sw, dst_w);
         const y1: u32 = @min(y0 + sh, dst_h);
@@ -203,10 +206,10 @@ pub const SurfaceManager = struct {
 
         var dy: u32 = y0;
         while (dy < y1) : (dy += 1) {
-            const sy: u32 = dy - y0;
+            const sy: u32 = dy - y0 + src_skip_y;
             var dx: u32 = x0;
             while (dx < x1) : (dx += 1) {
-                const sx: u32 = dx - x0;
+            const sx: u32 = dx - x0 + src_skip_x;
                 const si: usize = sy * src_stride + sx;
                 const di: usize = dy * dp + dx;
                 if (si >= src.len or di >= dst.len) continue;
