@@ -99,7 +99,7 @@ pub fn main() !void {
                     }
                     if (p) {
                         if (input.mods.ctrl and ev.code == evdev.KEY_Q)     { running = false; break; }
-                        if (input.mods.ctrl and ev.code == evdev.KEY_SPACE) { mode = mode.toggle(); dirty = true; }
+                        if (ev.code == evdev.KEY_F1) { mode = mode.toggle(); dirty = true; }
                     }
                 // Reenviar tecla al cliente Wayland activo
                 if (wl_server) |*srv| {

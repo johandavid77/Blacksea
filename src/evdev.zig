@@ -8,6 +8,7 @@ pub const KEY_LEFTCTRL   : u16 = 29;
 pub const KEY_LEFTSHIFT  : u16 = 42;
 pub const KEY_RIGHTSHIFT : u16 = 54;
 pub const KEY_LEFTALT    : u16 = 56;
+pub const KEY_F1 : u16 = 59;
 pub const KEY_SUPER      : u16 = 125;
 pub const KEY_Q          : u16 = 16;
 pub const KEY_SPACE      : u16 = 57;
