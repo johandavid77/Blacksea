@@ -151,6 +151,41 @@ pub const Framebuffer = struct {
         }
     }
 
+    pub fn fillRoundedBorder(self: *Framebuffer, x: u32, y: u32, w: u32, h: u32, bw: u32, r: u32, color: u32) void {
+        // Dibuja un borde redondeado de grosor bw y radio de esquina r
+        const r2 = r * r;
+        var row: u32 = 0;
+        while (row < h) : (row += 1) {
+            var col: u32 = 0;
+            while (col < w) : (col += 1) {
+                const px = x + col;
+                const py = y + row;
+                // Solo píxeles en el borde (dentro de bw px del borde)
+                const on_border = col < bw or col >= w -| bw or row < bw or row >= h -| bw;
+                if (!on_border) continue;
+                // Verificar esquinas redondeadas — si estamos en una esquina, usar círculo
+                const in_tl = col < r and row < r;
+                const in_tr = col >= w -| r and row < r;
+                const in_bl = col < r and row >= h -| r;
+                const in_br = col >= w -| r and row >= h -| r;
+                if (in_tl or in_tr or in_bl or in_br) {
+                    // Centro del círculo de la esquina
+                    const cx: u32 = if (in_tl or in_bl) x + r else x + w -| r;
+                    const cy: u32 = if (in_tl or in_tr) y + r else y + h -| r;
+                    const dx: i32 = @as(i32, @intCast(px)) - @as(i32, @intCast(cx));
+                    const dy: i32 = @as(i32, @intCast(py)) - @as(i32, @intCast(cy));
+                    const dist2: u32 = @intCast(dx * dx + dy * dy);
+                    const inner_r = if (r > bw) r - bw else 0;
+                    // Fuera del radio externo o dentro del radio interno → no pintar
+                    if (dist2 > r2) continue;
+                    if (dist2 < inner_r * inner_r) continue;
+                }
+                const idx = py * (self.pitch / 4) + px;
+                if (idx < self.data.len) self.data[idx] = color;
+            }
+        }
+    }
+
     pub fn drawText(self: *Framebuffer, x: u32, y: u32, text: []const u8, color: u32, bg: u32) void {
         _ = self; _ = x; _ = y; _ = text; _ = color; _ = bg;
     }

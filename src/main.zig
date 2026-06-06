@@ -259,17 +259,15 @@ fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager, mode: La
         const area: u64 = @as(u64, @intCast(buf.width)) * @as(u64, @intCast(@abs(buf.height)));
         if (area < 100000) continue; // skip decoraciones pequeñas en pasada 1
         surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
-        // Borde estilo Niri: 2px accent color alrededor de la ventana
-        const border_color: u32 = 0xFF5E81AC; // azul Niri
+        // Borde redondeado estilo Niri
+        const border_color: u32 = 0xFF5E81AC;
         const bw: u32 = 2;
+        const brad: u32 = 8; // radio de esquina
         const sx: u32 = if (surf.x > 0) @intCast(surf.x) else 0;
         const sy: u32 = if (surf.y > 0) @intCast(surf.y) else 0;
         const sw: u32 = @intCast(buf.width);
         const sh: u32 = @intCast(@abs(buf.height));
-        fb.fillRect(sx, sy, sw, bw, border_color);
-        fb.fillRect(sx, sy +| sh, sw, bw, border_color);
-        fb.fillRect(sx, sy, bw, sh, border_color);
-        fb.fillRect(sx +| sw -| bw, sy, bw, sh +| bw, border_color);
+        fb.fillRoundedBorder(sx, sy, sw, sh, bw, brad, border_color);
     }
     // Pasada 2: subsuperficies pequeñas (decoraciones CSD) encima
     for (&surfaces.surfaces) |*surf| {
