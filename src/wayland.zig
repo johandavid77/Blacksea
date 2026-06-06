@@ -37,7 +37,7 @@ pub const MsgBuf = struct {
 
 pub const Client = struct {
     fd       : i32,
-    recv_buf : [4096]u8 = undefined,
+    recv_buf : [65536]u8 = undefined,
     recv_len : usize = 0,
     next_id  : u32 = 0xFF000000,
     compositor_id: u32 = 0,
@@ -56,6 +56,9 @@ pub const Client = struct {
     xdg_surface_count: usize = 0,
     keyboard_id : u32 = 0,
     pointer_id  : u32 = 0,
+    frame_cb_id : u32 = 0,
+    needs_blit  : bool = false,
+    dead        : bool = false,
 
     pub fn init(fd: i32) Client { return .{ .fd = fd }; }
 
@@ -65,18 +68,34 @@ pub const Client = struct {
             const rc = linux.sendto(@intCast(self.fd), data[sent..].ptr,
                 data.len - sent, linux.MSG.NOSIGNAL, null, 0);
             const n: isize = @bitCast(rc);
-            if (n <= 0) break;
+            if (n <= 0) { self.dead = true; return; }
             sent += @intCast(n);
         }
     }
 
     pub fn sendEvent(self: *Client, object_id: u32, opcode: u16, payload: []const u8) void {
+        if (self.dead) return;
         const total: u32 = @intCast(8 + payload.len);
+        // Enviar header+payload en un solo writev para atomicidad
         var h: [8]u8 = undefined;
         std.mem.writeInt(u32, h[0..4], object_id, .little);
         std.mem.writeInt(u32, h[4..8], (total << 16) | opcode, .little);
-        self.send(&h);
-        if (payload.len > 0) self.send(payload);
+        if (payload.len == 0) {
+            self.send(&h);
+        } else {
+            var iovs = [2]std.posix.iovec_const{
+                .{ .base = &h, .len = 8 },
+                .{ .base = payload.ptr, .len = payload.len },
+            };
+            const msg = linux.msghdr_const{
+                .name = null, .namelen = 0,
+                .iov = @ptrCast(&iovs), .iovlen = 2,
+                .control = null, .controllen = 0, .flags = 0,
+            };
+            const rc = linux.sendmsg(@intCast(self.fd), @ptrCast(&msg), linux.MSG.NOSIGNAL);
+            const n: isize = @bitCast(rc);
+            if (n < 0) self.dead = true;
+        }
     }
 
     pub fn newId(self: *Client) u32 {
@@ -89,7 +108,7 @@ pub const globals = [_]struct { name: []const u8, version: u32 }{
     .{ .name = "wl_shm",        .version = 1 },
     .{ .name = "xdg_wm_base",   .version = 2 },
     .{ .name = "wl_seat",       .version = 7 },
-    .{ .name = "wl_output",        .version = 4 },
+    .{ .name = "wl_output",        .version = 5 },
     .{ .name = "wl_subcompositor",      .version = 1 },
     .{ .name = "wl_data_device_manager",    .version = 3 },
 };
@@ -241,7 +260,7 @@ pub const Server = struct {
                 }
             }
             const bytes: isize = @bitCast(n);
-            if (bytes <= 0) {
+            if (client.dead or bytes < 0) {
                 _ = linux.close(@intCast(client.fd));
                 slot.* = null;
                 continue;
@@ -384,6 +403,8 @@ pub const Server = struct {
             }
             break :blk false;
         };
+        // wl_shm_pool.resize (opcode 1) y destroy (opcode 2) — ignorar
+        if (is_pool and (opcode == 1 or opcode == 2)) { return; }
         if (is_pool and opcode == 0 and payload.len >= 20) {
             const buf_id = readUint(payload, 0);
             const offset = readInt(payload, 4);
@@ -427,9 +448,7 @@ pub const Server = struct {
                 client.xdg_surface_ids[client.xdg_surface_count] = xdg_surface_id;
                 client.xdg_surface_count += 1;
             }
-            // Enviar configure inmediatamente
-            self.serial += 1;
-            xdg_mod.sendXdgSurfaceConfigure(client.fd, xdg_surface_id, self.serial);
+            // NO enviar configure aquí — esperar get_toplevel
             return;
         }
 
@@ -524,27 +543,23 @@ pub const Server = struct {
                 3 => { // frame callback
                     if (payload.len >= 4) {
                         const cb_id = readUint(payload, 0);
-                        // Enviar wl_callback.done inmediatamente
-                        var b = MsgBuf{};
-                        // Timestamp relativo via clock_gettime
-                    var _ts: linux.timespec = undefined;
-                    _ = linux.clock_gettime(linux.CLOCK.MONOTONIC, &_ts);
-                    const _ms: u32 = @truncate(@as(u64, @intCast(_ts.sec)) * 1000 + @as(u64, @intCast(_ts.nsec)) / 1_000_000);
-                    b.uint(_ms);
-                        client.sendEvent(cb_id, 0, b.slice());
+                        client.frame_cb_id = cb_id;
                     }
                     return;
                 },
                 6 => { // commit
+                    client.needs_blit = true;
                     if (surf.pending_buf) |pb| {
                         // Liberar buffer anterior si existe
                         if (surf.buffer) |old_buf| {
                             if (old_buf != pb) {
-                        // No enviar wl_buffer.release — foot lo destruye solo
-                    // buffer anterior liberado por el cliente via wl_buffer.destroy
-                    // old_buf.* = std.mem.zeroes(surface_mod.Buffer); // no zeroes
+                        // No enviar wl_buffer.release aqui — se envia post-blit
+
+
                             }
                         }
+                        // Release del buffer anterior (ahora libre)
+                        if (surf.buffer) |ob| { if (ob.id != pb.id) client.sendEvent(ob.id, 0, &[_]u8{}); }
                         surf.buffer = pb;
                         surf.width  = pb.width;
                         surf.height = pb.height;
@@ -562,6 +577,11 @@ pub const Server = struct {
                 },
                 else => {},
             }
+            return;
+        }
+        // wl_buffer.destroy (op=0) — cualquier objeto conocido como buffer
+        if (opcode == 0 and payload.len == 0) {
+            // Puede ser wl_buffer.destroy o wl_surface.destroy — ignorar ambos
             return;
         }
         // Mensaje desconocido — ignorar

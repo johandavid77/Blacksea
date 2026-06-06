@@ -81,6 +81,7 @@ pub fn main() !void {
     var cursor_x   : i32 = @intCast(output.width  / 2);
     var cursor_y   : i32 = @intCast(output.height / 2);
     var dirty      = false;
+    var last_render_ms: u64 = 0;
 
     while (running) {
         // ── Input ────────────────────────────────────────────────────────
@@ -112,7 +113,7 @@ pub fn main() !void {
                                 _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
                                 const abs_ms: u64 = @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / 1_000_000;
                                 const now_ms: u32 = @truncate(abs_ms - g_start_ms);
-                                seat_mod.sendKey(cl.fd, cl.keyboard_id, srv.serial, now_ms, ev.code + 8, key_state); // evdev+8 = XKB keycode
+                                seat_mod.sendKey(cl.fd, cl.keyboard_id, srv.serial, now_ms, ev.code, key_state); // evdev+8 = XKB keycode
                                 dirty = true;
                                 break;
                             }
@@ -133,7 +134,19 @@ pub fn main() !void {
         // ── Wayland: siempre procesar, independiente del redraw ───────────
         if (wl_server) |*s| {
             s.poll();
-            if (wl_server) |*srv2| { _ = srv2; dirty = true; }
+            // Marcar dirty si hay frame callback o blit pendiente
+            for (&s.clients) |*slot| {
+                if (slot.*) |*cl| {
+                    if (cl.frame_cb_id > 0 or cl.needs_blit) { dirty = true; break; }
+                }
+            }
+        }
+        // Throttle: render máximo cada 16ms
+        if (!dirty) {
+            var _t: std.os.linux.timespec = undefined;
+            _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &_t);
+            const _now: u64 = @as(u64,@intCast(_t.sec))*1000 + @as(u64,@intCast(_t.nsec))/1_000_000;
+            if (_now -% last_render_ms >= 16) dirty = true;
         }
 
         // ── Render ───────────────────────────────────────────────────────
@@ -141,6 +154,25 @@ pub fn main() !void {
             drawFrame(output, mode, @intCast(cursor_x), @intCast(cursor_y));
             if (wl_server) |*s| blitSurfaces(output, &s.surfaces, mode);
             try output.pageFlip(device.fd);
+            if (wl_server) |*srv| {
+                for (&srv.clients) |*slot| {
+                    if (slot.*) |*cl| {
+                        if (cl.frame_cb_id > 0) {
+                            var ts3: std.os.linux.timespec = undefined;
+                            _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts3);
+                            const ms3: u32 = @truncate(@as(u64, @intCast(ts3.sec)) * 1000 + @as(u64, @intCast(ts3.nsec)) / 1_000_000);
+                            var fcb = wayland.MsgBuf{};
+                            fcb.uint(ms3);
+                            cl.sendEvent(cl.frame_cb_id, 0, fcb.slice());
+                            cl.frame_cb_id = 0;
+                        cl.needs_blit = true;
+                        }
+                    }
+                }
+            }
+            var _t2: std.os.linux.timespec = undefined;
+            _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &_t2);
+            last_render_ms = @as(u64,@intCast(_t2.sec))*1000 + @as(u64,@intCast(_t2.nsec))/1_000_000;
             dirty = false;
         }
 
