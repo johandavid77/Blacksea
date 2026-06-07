@@ -80,7 +80,8 @@ pub fn main() !void {
     var mode      : LayoutMode = .scrolling;
     var cursor_x   : i32 = @intCast(output.width  / 2);
     var cursor_y   : i32 = @intCast(output.height / 2);
-    var dirty      = false;
+    var dirty          = false;
+    var pointer_moved  = false;
     var last_render_ms: u64 = 0;
 
     while (running) {
@@ -121,6 +122,12 @@ pub fn main() !void {
                     }
                 }
                 }
+                if (ev.type == evdev.EV_ABS) {
+                    if (ev.code == evdev.ABS_X) cursor_x = @intCast(@divTrunc(@as(i64,ev.value)*@as(i64,@intCast(output.width)), 65535));
+                    if (ev.code == evdev.ABS_Y) cursor_y = @intCast(@divTrunc(@as(i64,ev.value)*@as(i64,@intCast(output.height)), 65535));
+                    dirty = true;
+                    pointer_moved = true;
+                }
                 if (ev.type == evdev.EV_REL) {
                     if (ev.code == evdev.REL_X) cursor_x = @max(0, @min(@as(i32,@intCast(output.width))-1,  cursor_x+ev.value));
                     if (ev.code == evdev.REL_Y) cursor_y = @max(0, @min(@as(i32,@intCast(output.height))-1, cursor_y+ev.value));
@@ -152,8 +159,13 @@ pub fn main() !void {
         // ── Render ───────────────────────────────────────────────────────
         if (dirty) {
             drawFrame(output, mode, @intCast(cursor_x), @intCast(cursor_y));
-            if (wl_server) |*s| blitSurfaces(output, &s.surfaces, mode);
+            if (wl_server) |*s| {
+                blitSurfaces(output, &s.surfaces, mode);
+                blitCursor(output, &s.surfaces, &s.clients, cursor_x, cursor_y);
+            }
             try output.pageFlip(device.fd);
+
+
             if (wl_server) |*srv| {
                 for (&srv.clients) |*slot| {
                     if (slot.*) |*cl| {
@@ -269,5 +281,23 @@ fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager, mode: La
         const area: u64 = @as(u64, @intCast(buf.width)) * @as(u64, @intCast(@abs(buf.height)));
         if (area >= 100000) continue; // ya blitadas en pasada 1
         surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
+    }
+}
+
+fn blitCursor(output: *drm.Output, surfaces: *wayland.SurfaceManager, clients: []?wayland.Client, cx: i32, cy: i32) void {
+    const fb = output.drawBuffer();
+    if (fb.data.len == 0) return;
+    for (clients) |*slot| {
+        const cl = slot.* orelse continue;
+        if (cl.cursor_surface_id == 0) continue;
+        for (&surfaces.surfaces) |*surf| {
+            if (surf.id != cl.cursor_surface_id or !surf.mapped) continue;
+            const buf = surf.buffer orelse continue;
+            if (buf.fd < 0 or buf.data.len == 0) continue;
+            surf.x = cx - cl.cursor_hotspot_x;
+            surf.y = cy - cl.cursor_hotspot_y;
+            surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
+            return;
+        }
     }
 }
