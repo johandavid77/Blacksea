@@ -32,6 +32,7 @@ pub const MsgBuf = struct {
         @memset(self.data[self.len..self.len + pad], 0);
         self.len += pad;
     }
+    pub fn fixed(self: *MsgBuf, v: i32) void { self.uint(@bitCast(v << 8)); }
     pub fn slice(self: *MsgBuf) []const u8 { return self.data[0..self.len]; }
 };
 
@@ -108,10 +109,10 @@ pub const Client = struct {
 };
 
 pub const globals = [_]struct { name: []const u8, version: u32 }{
-    .{ .name = "wl_compositor", .version = 4 },
+    .{ .name = "wl_compositor", .version = 5 },
     .{ .name = "wl_shm",        .version = 1 },
     .{ .name = "xdg_wm_base",   .version = 2 },
-    .{ .name = "wl_seat",       .version = 7 },
+    .{ .name = "wl_seat",      .version = 5 },
     .{ .name = "wl_output",        .version = 5 },
     .{ .name = "wl_subcompositor",      .version = 1 },
     .{ .name = "wl_data_device_manager",    .version = 3 },
@@ -421,7 +422,15 @@ pub const Server = struct {
             return;
         }
 
-        // wl_pointer.set_cursor (opcode 0)
+        // wl_pointer requests — ignorar todos excepto set_cursor
+        if (object_id == client.pointer_id) {
+            if (opcode == 0 and payload.len >= 12) { // set_cursor
+                client.cursor_surface_id = readUint(payload, 4);
+                client.cursor_hotspot_x  = @bitCast(readUint(payload, 8));
+                client.cursor_hotspot_y  = @bitCast(readUint(payload, 12));
+            }
+            return; // ignorar release y cualquier otro opcode
+        }
         if (object_id == client.pointer_id and opcode == 0 and payload.len >= 12) {
             client.cursor_surface_id = readUint(payload, 4);
             client.cursor_hotspot_x  = @bitCast(readUint(payload, 8));

@@ -164,6 +164,43 @@ pub fn main() !void {
                 blitCursor(output, &s.surfaces, &s.clients, cursor_x, cursor_y);
             }
             try output.pageFlip(device.fd);
+            // Pointer enter/leave — solo cuando cambia surface
+            if (wl_server) |*srv| {
+                for (&srv.clients) |*slot| {
+                    if (slot.*) |*cl| {
+                        if (cl.pointer_id == 0 or !pointer_moved) continue;
+                        var sid: u32 = 0;
+                        for (srv.surfaces.surfaces) |s| {
+                            if (s.id > 0 and s.mapped and s.client_fd == cl.fd and
+                                s.width > 0 and s.height > 0 and
+                                cursor_x >= s.x and cursor_x < s.x+@as(i32,@intCast(s.width)) and
+                                cursor_y >= s.y and cursor_y < s.y+@as(i32,@intCast(s.height)))
+                                sid = s.id;
+                        }
+                        if (sid == cl.pointer_surface_id) continue;
+                        if (cl.pointer_surface_id > 0) {
+                            srv.serial += 1;
+                            var lv = wayland.MsgBuf{};
+                            lv.uint(srv.serial); lv.uint(cl.pointer_surface_id);
+                            cl.sendEvent(cl.pointer_id, 1, lv.slice()); // leave
+                            cl.sendEvent(cl.pointer_id, 5, &[_]u8{});
+                        }
+                        cl.pointer_surface_id = sid;
+                        if (sid > 0) {
+                            const rx: i32 = cursor_x - (for (srv.surfaces.surfaces) |s| { if (s.id==sid) break s.x; } else 0);
+                            const ry: i32 = cursor_y - (for (srv.surfaces.surfaces) |s| { if (s.id==sid) break s.y; } else 0);
+                            srv.serial += 1;
+                            var en = wayland.MsgBuf{};
+                            en.uint(srv.serial); en.uint(sid);
+                            en.fixed(rx); en.fixed(ry);
+                            cl.sendEvent(cl.pointer_id, 0, en.slice());
+                            cl.sendEvent(cl.pointer_id, 5, &[_]u8{});
+                        }
+                    }
+                }
+                if (pointer_moved) pointer_moved = false;
+            }
+
 
 
             if (wl_server) |*srv| {
