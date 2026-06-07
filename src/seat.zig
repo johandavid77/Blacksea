@@ -163,8 +163,8 @@ pub fn sendPointerEnter(fd: i32, pointer_id: u32, serial: u32, surface_id: u32, 
     var p: [16]u8 = undefined;
     writeU32(&p, 0, serial);
     writeU32(&p, 4, surface_id);
-    writeI32(&p, 8, sx);
-    writeI32(&p, 12, sy);
+    writeI32(&p, 8, sx << 8);
+    writeI32(&p, 12, sy << 8);
     sendEvent(fd, pointer_id, WL_POINTER_ENTER, &p);
 }
 
@@ -172,8 +172,8 @@ pub fn sendPointerEnter(fd: i32, pointer_id: u32, serial: u32, surface_id: u32, 
 pub fn sendPointerMotion(fd: i32, pointer_id: u32, time: u32, sx: i32, sy: i32) void {
     var p: [12]u8 = undefined;
     writeU32(&p, 0, time);
-    writeI32(&p, 4, sx);
-    writeI32(&p, 8, sy);
+    writeI32(&p, 4, sx << 8);
+    writeI32(&p, 8, sy << 8);
     sendEvent(fd, pointer_id, WL_POINTER_MOTION, &p);
 }
 
@@ -186,4 +186,14 @@ pub fn sendPointerButton(fd: i32, pointer_id: u32, serial: u32, time: u32, butto
     writeU32(&p, 12, state);
     writeU32(&p, 16, 0);
     sendEvent(fd, pointer_id, WL_POINTER_BUTTON, &p);
+}
+
+pub fn sendPointerLeave(fd: i32, pointer_id: u32, surface_id: u32, serial: u32) void {
+    var p: [8]u8 = undefined;
+    std.mem.writeInt(u32, p[0..4], serial, .little);
+    std.mem.writeInt(u32, p[4..8], surface_id, .little);
+    sendEvent(fd, pointer_id, 2, &p);
+}
+pub fn sendPointerFrame(fd: i32, pointer_id: u32) void {
+    sendEvent(fd, pointer_id, 5, &[_]u8{});
 }

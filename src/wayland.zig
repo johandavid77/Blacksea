@@ -56,7 +56,11 @@ pub const Client = struct {
     xdg_surface_count: usize = 0,
     keyboard_id : u32 = 0,
     pointer_id  : u32 = 0,
-    frame_cb_id : u32 = 0,
+    frame_cb_id        : u32  = 0,
+    pointer_surface_id : u32  = 0,
+    cursor_surface_id  : u32  = 0,
+    cursor_hotspot_x   : i32  = 0,
+    cursor_hotspot_y   : i32  = 0,
     needs_blit  : bool = false,
     dead        : bool = false,
 
@@ -417,6 +421,13 @@ pub const Server = struct {
             return;
         }
 
+        // wl_pointer.set_cursor (opcode 0)
+        if (object_id == client.pointer_id and opcode == 0 and payload.len >= 12) {
+            client.cursor_surface_id = readUint(payload, 4);
+            client.cursor_hotspot_x  = @bitCast(readUint(payload, 8));
+            client.cursor_hotspot_y  = @bitCast(readUint(payload, 12));
+            return;
+        }
         // wl_seat.get_pointer (opcode 0)
         if (object_id == client.seat_id and opcode == 0 and payload.len >= 4) {
             client.pointer_id = readUint(payload, 0);

@@ -121,6 +121,11 @@ pub fn main() !void {
                     }
                 }
                 }
+                if (ev.type == evdev.EV_ABS) {
+                    if (ev.code == evdev.ABS_X) cursor_x = @intCast(@divTrunc(@as(i64, ev.value) * @as(i64, @intCast(output.width)),  65535));
+                    if (ev.code == evdev.ABS_Y) cursor_y = @intCast(@divTrunc(@as(i64, ev.value) * @as(i64, @intCast(output.height)), 65535));
+                    dirty = true;
+                }
                 if (ev.type == evdev.EV_REL) {
                     if (ev.code == evdev.REL_X) cursor_x = @max(0, @min(@as(i32,@intCast(output.width))-1,  cursor_x+ev.value));
                     if (ev.code == evdev.REL_Y) cursor_y = @max(0, @min(@as(i32,@intCast(output.height))-1, cursor_y+ev.value));
@@ -154,22 +159,7 @@ pub fn main() !void {
             drawFrame(output, mode, @intCast(cursor_x), @intCast(cursor_y));
             if (wl_server) |*s| blitSurfaces(output, &s.surfaces, mode);
             try output.pageFlip(device.fd);
-            if (wl_server) |*srv| {
-                for (&srv.clients) |*slot| {
-                    if (slot.*) |*cl| {
-                        if (cl.frame_cb_id > 0) {
-                            var ts3: std.os.linux.timespec = undefined;
-                            _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts3);
-                            const ms3: u32 = @truncate(@as(u64, @intCast(ts3.sec)) * 1000 + @as(u64, @intCast(ts3.nsec)) / 1_000_000);
-                            var fcb = wayland.MsgBuf{};
-                            fcb.uint(ms3);
-                            cl.sendEvent(cl.frame_cb_id, 0, fcb.slice());
-                            cl.frame_cb_id = 0;
-                        cl.needs_blit = true;
-                        }
-                    }
-                }
-            }
+
             var _t2: std.os.linux.timespec = undefined;
             _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &_t2);
             last_render_ms = @as(u64,@intCast(_t2.sec))*1000 + @as(u64,@intCast(_t2.nsec))/1_000_000;

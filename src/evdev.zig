@@ -3,6 +3,9 @@ const linux = std.os.linux;
 
 pub const EV_KEY: u16 = 0x01;
 pub const EV_REL: u16 = 0x02;
+pub const EV_ABS: u16 = 0x03;
+pub const ABS_X:  u16 = 0x00;
+pub const ABS_Y:  u16 = 0x01;
 
 pub const KEY_LEFTCTRL   : u16 = 29;
 pub const KEY_LEFTSHIFT  : u16 = 42;
