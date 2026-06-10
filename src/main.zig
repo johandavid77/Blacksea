@@ -161,10 +161,22 @@ pub fn main() !void {
             drawFrame(output, mode, @intCast(cursor_x), @intCast(cursor_y));
             if (wl_server) |*s| {
                 blitSurfaces(output, &s.surfaces, mode);
+                // Bordes con esquinas redondeadas
+                const bw2: u32 = 2;
+                const bc2: u32 = 0xFF4A90D9;
+                if (bw2 > 0) {
+                    for (&s.surfaces.surfaces) |*surf| {
+                        if (surf.id == 0 or !surf.mapped) continue;
+                        if (surf.width == 0 or surf.height == 0) continue;
+                        const area: u64 = @as(u64,@intCast(surf.width))*@as(u64,@intCast(@abs(surf.height)));
+                        if (area < 100000) continue; // solo ventanas principales
+                        drawBorder(output, surf, bw2, bc2);
+                    }
+                }
                 blitCursor(output, &s.surfaces, &s.clients, cursor_x, cursor_y);
             }
             try output.pageFlip(device.fd);
-            // Pointer enter/leave — solo cuando cambia surface
+            // Pointer enter/leave
             if (wl_server) |*srv| {
                 for (&srv.clients) |*slot| {
                     if (slot.*) |*cl| {
@@ -178,6 +190,10 @@ pub fn main() !void {
                                 sid = s.id;
                         }
                         if (sid == cl.pointer_surface_id) continue;
+                        // Solo procesar si el cursor tiene posicion valida
+                        if (cursor_x < 0 or cursor_y < 0) continue;
+                        // Guard: cliente debe haber completado al menos un render cycle
+                        if (cl.needs_blit or cl.frame_cb_id > 0) continue;
                         if (cl.pointer_surface_id > 0) {
                             srv.serial += 1;
                             var lv = wayland.MsgBuf{};
@@ -318,6 +334,55 @@ fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager, mode: La
         const area: u64 = @as(u64, @intCast(buf.width)) * @as(u64, @intCast(@abs(buf.height)));
         if (area >= 100000) continue; // ya blitadas en pasada 1
         surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
+    }
+}
+
+
+fn drawBorder(output: *drm.Output, surf: *surface_mod.Surface, bw: u32, color: u32) void {
+    const fb = output.drawBuffer();
+    if (fb.data.len == 0) return;
+    const W: i32 = @intCast(output.width);
+    const H: i32 = @intCast(output.height);
+    const pitch: i32 = @intCast(fb.pitch / 4);
+    const px: [*]u32 = @ptrCast(@alignCast(fb.data.ptr));
+    const x0 = surf.x;
+    const y0 = surf.y;
+    const x1 = surf.x + @as(i32, @intCast(surf.width));
+    const y1 = surf.y + @as(i32, @intCast(surf.height));
+    const b: i32 = @intCast(bw);
+    const r: i32 = 8; // corner radius
+    // Función inline: pintar pixel con clip
+    const setpx = struct {
+        fn f(p: [*]u32, x: i32, y: i32, w: i32, h: i32, pt: i32, c: u32) void {
+            if (x < 0 or y < 0 or x >= w or y >= h) return;
+            p[@intCast(y * pt + x)] = c;
+        }
+    }.f;
+    // 4 lados del borde
+    var i: i32 = 0;
+    while (i < b) : (i += 1) {
+        // top y bottom
+        var x: i32 = x0 + r;
+        while (x < x1 - r) : (x += 1) {
+            setpx(px, x, y0 - i - 1, W, H, pitch, color);
+            setpx(px, x, y1 + i,     W, H, pitch, color);
+        }
+        // left y right
+        var y: i32 = y0 + r;
+        while (y < y1 - r) : (y += 1) {
+            setpx(px, x0 - i - 1, y, W, H, pitch, color);
+            setpx(px, x1 + i,     y, W, H, pitch, color);
+        }
+        // esquinas redondeadas (arco de 90°)
+        var a: i32 = 0;
+        while (a <= r) : (a += 1) {
+            const dy: i32 = r - a;
+            const dx: i32 = @intFromFloat(@sqrt(@as(f32, @floatFromInt(r*r - dy*dy))));
+            setpx(px, x0 - i - 1 + r - dx, y0 - i - 1 + r - dy, W, H, pitch, color);
+            setpx(px, x1 + i - r + dx,     y0 - i - 1 + r - dy, W, H, pitch, color);
+            setpx(px, x0 - i - 1 + r - dx, y1 + i - r + dy,     W, H, pitch, color);
+            setpx(px, x1 + i - r + dx,     y1 + i - r + dy,     W, H, pitch, color);
+        }
     }
 }
 
