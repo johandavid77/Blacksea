@@ -91,6 +91,30 @@ pub fn main() !void {
             while (std.posix.read(dev.fd, std.mem.asBytes(&ev))) |n| {
                 if (n < @sizeOf(evdev.InputEvent)) break;
                 if (ev.type == evdev.EV_KEY) {
+                    // Mouse buttons
+                    if (ev.code == evdev.BTN_LEFT or ev.code == evdev.BTN_RIGHT or ev.code == evdev.BTN_MIDDLE) {
+                        if (wl_server) |*srv| {
+                            var ts_b: std.os.linux.timespec = undefined;
+                            _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts_b);
+                            const ms_b: u32 = @truncate(@as(u64,@intCast(ts_b.sec))*1000+@as(u64,@intCast(ts_b.nsec))/1_000_000);
+                            for (&srv.clients) |*slot| {
+                                if (slot.*) |*cl| {
+                                    if (cl.pointer_id == 0) continue;
+                                    if (cl.pointer_surface_id == 0) continue;
+                                    // button event via cl.sendEvent (atomic)
+                                    srv.serial += 1;
+                                    const btn: u32 = 0x110 + @as(u32, ev.code - evdev.BTN_LEFT);
+                                    var bp = wayland.MsgBuf{};
+                                    bp.uint(srv.serial); bp.uint(ms_b);
+                                    bp.uint(btn); bp.uint(@intCast(ev.value));
+                                    cl.sendEvent(cl.pointer_id, 3, bp.slice()); // button
+                                    // frame omitido
+                                }
+                            }
+                        }
+                        dirty = true;
+                        continue;
+                    }
                     const p = ev.value == evdev.KEY_PRESSED;
                     switch (ev.code) {
                         evdev.KEY_SUPER                           => input.mods.super = p,
@@ -414,7 +438,7 @@ fn drawArrowCursor(output: *drm.Output, cx: i32, cy: i32) void {
     const H: i32 = @intCast(output.height);
     const pitch: i32 = @intCast(fb.pitch / 4);
     const px: [*]u32 = @ptrCast(@alignCast(fb.data.ptr));
-    const arrow = [16][13]u2{
+    const arrow = [13][13]u2{
         .{ 2,0,0,0,0,0,0,0,0,0,0,0,0 },
         .{ 2,2,0,0,0,0,0,0,0,0,0,0,0 },
         .{ 2,1,2,0,0,0,0,0,0,0,0,0,0 },
@@ -424,13 +448,10 @@ fn drawArrowCursor(output: *drm.Output, cx: i32, cy: i32) void {
         .{ 2,1,1,1,1,1,2,0,0,0,0,0,0 },
         .{ 2,1,1,1,1,1,1,2,0,0,0,0,0 },
         .{ 2,1,1,1,1,1,1,1,2,0,0,0,0 },
-        .{ 2,1,1,2,0,0,0,0,0,0,0,0,0 },
-        .{ 2,1,1,2,0,0,0,0,0,0,0,0,0 },
-        .{ 2,1,1,2,0,0,0,0,0,0,0,0,0 },
-        .{ 2,1,1,2,0,0,0,0,0,0,0,0,0 },
-        .{ 2,1,1,2,0,0,0,0,0,0,0,0,0 },
-        .{ 2,1,1,2,0,0,0,0,0,0,0,0,0 },
-        .{ 0,2,2,2,0,0,0,0,0,0,0,0,0 },
+        .{ 2,1,1,1,1,1,2,2,2,0,0,0,0 },
+        .{ 2,1,1,2,1,1,2,0,0,0,0,0,0 },
+        .{ 2,1,2,0,2,1,1,2,0,0,0,0,0 },
+        .{ 2,2,0,0,0,2,1,1,2,0,0,0,0 },
     };
     for (arrow, 0..) |row, dy| {
         for (row, 0..) |v, dx| {
