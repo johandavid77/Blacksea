@@ -94,9 +94,9 @@ pub const SurfaceManager = struct {
         return null;
     }
 
-    pub fn getSurface(self: *SurfaceManager, id: u32) ?*Surface {
+    pub fn getSurface(self: *SurfaceManager, id: u32, client_fd: i32) ?*Surface {
         for (&self.surfaces) |*s| {
-            if (s.id == id) return s;
+            if (s.id == id and s.client_fd == client_fd) return s;
         }
         return null;
     }

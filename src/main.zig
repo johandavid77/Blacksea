@@ -213,7 +213,22 @@ pub fn main() !void {
                                 cursor_y >= s.y and cursor_y < s.y+@as(i32,@intCast(s.height)))
                                 sid = s.id;
                         }
-                        if (sid == cl.pointer_surface_id) continue;
+                        if (sid == cl.pointer_surface_id) {
+                            // motion dentro de la misma surface
+                            if (sid > 0 and pointer_moved) {
+                                var rx: i32 = cursor_x; var ry: i32 = cursor_y;
+                                for (srv.surfaces.surfaces) |s| { if (s.id==sid) { rx=cursor_x-s.x; ry=cursor_y-s.y; break; } }
+                                var ts_m: std.os.linux.timespec = undefined;
+                                _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts_m);
+                                const ms_m: u32 = @truncate(@as(u64,@intCast(ts_m.sec))*1000+@as(u64,@intCast(ts_m.nsec))/1_000_000);
+                                var mo = wayland.MsgBuf{};
+                                mo.uint(ms_m);
+                                mo.uint(@bitCast(rx << 8));
+                                mo.uint(@bitCast(ry << 8));
+                                cl.sendEvent(cl.pointer_id, 2, mo.slice()); // motion
+                            }
+                            continue;
+                        }
                         // Solo procesar si el cursor tiene posicion valida
                         if (cursor_x < 0 or cursor_y < 0) continue;
                         // Guard: cliente debe haber completado al menos un render cycle

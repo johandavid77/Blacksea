@@ -550,7 +550,7 @@ pub const Server = struct {
             return;
         }
 
-        if (self.surfaces.getSurface(object_id)) |surf| {
+        if (self.surfaces.getSurface(object_id, client.fd)) |surf| {
             switch (opcode) {
                 0 => self.surfaces.destroySurface(object_id),
                 1 => { // attach
