@@ -132,7 +132,7 @@ pub fn main() !void {
                     const key_state: u32 = if (ev.value == evdev.KEY_PRESSED) 1 else 0;
                     for (&srv.clients) |*slot| {
                         if (slot.*) |*cl| {
-                            if (cl.keyboard_id > 0) {
+                            if (cl.keyboard_id > 0 and cl.fd == srv.focused_fd) {
                                 srv.serial += 1;
                                 var ts: std.os.linux.timespec = undefined;
                                 _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
@@ -350,7 +350,7 @@ fn applyTiling(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
 }
 
 fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager, mode: LayoutMode) void {
-    if (mode == .tiling) applyTiling(output, surfaces);
+    applyTiling(output, surfaces); _ = mode;
     const fb = output.drawBuffer();
     if (fb.data.len == 0) return;
     _ = @min(back_pixels.len, fb.data.len);
