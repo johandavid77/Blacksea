@@ -62,6 +62,7 @@ pub const Client = struct {
     cursor_surface_id  : u32  = 0,
     cursor_hotspot_x   : i32  = 0,
     cursor_hotspot_y   : i32  = 0,
+    keyboard_given     : bool = false,
     needs_blit  : bool = false,
     dead        : bool = false,
 
@@ -450,9 +451,12 @@ pub const Server = struct {
             // Enviar enter si hay superficie activa
             for (self.surfaces.surfaces) |s| {
                 if (s.id > 0 and s.client_fd == client.fd and s.mapped) {
-                    self.serial += 1;
-                    seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, s.id, self.serial);
-                    break;
+                    if (self.focused_fd == -1 or self.focused_fd == client.fd) {
+                        self.serial += 1;
+                        seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, s.id, self.serial);
+                        if (self.focused_fd == -1) self.focused_fd = client.fd;
+                        break;
+                    }
                 }
             }
             return;
@@ -499,6 +503,7 @@ pub const Server = struct {
                 if (client.keyboard_id > 0 and surf_id > 0) {
                     self.serial += 1;
                     seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, surf_id, self.serial);
+                    if (self.focused_fd == -1) self.focused_fd = client.fd;
                     seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
                     for (&self.surfaces.surfaces) |*s| {
                         if (s.id == surf_id) { s.keyboard_entered = true; break; }
@@ -590,6 +595,7 @@ pub const Server = struct {
                         if (client.keyboard_id > 0 and !surf.keyboard_entered and surf.xdg_toplevel_id > 0) {
                             self.serial += 1;
                             seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, object_id, self.serial);
+                        if (self.focused_fd == -1) self.focused_fd = client.fd;
                     surf.keyboard_entered = true;
                     seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
                 }

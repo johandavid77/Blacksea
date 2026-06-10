@@ -364,16 +364,7 @@ fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager, mode: La
         if (area < 100000) continue; // skip decoraciones pequeñas en pasada 1
         surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
     }
-    // Pasada 2: subsuperficies pequeñas (decoraciones CSD) encima
-    for (&surfaces.surfaces) |*surf| {
-        if (surf.id == 0 or !surf.mapped) continue;
-        const buf = surf.buffer orelse continue;
-        if (buf.fd < 0 or buf.data.len == 0) continue;
-        if (buf.width <= 0 or buf.height <= 0) continue;
-        const area: u64 = @as(u64, @intCast(buf.width)) * @as(u64, @intCast(@abs(buf.height)));
-        if (area >= 100000) continue; // ya blitadas en pasada 1
-        surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
-    }
+    // Pasada 2: subsuperficies CSD omitidas (compositor maneja decoraciones)
 }
 
 
