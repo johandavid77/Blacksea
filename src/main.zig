@@ -389,6 +389,7 @@ fn drawBorder(output: *drm.Output, surf: *surface_mod.Surface, bw: u32, color: u
 fn blitCursor(output: *drm.Output, surfaces: *wayland.SurfaceManager, clients: []?wayland.Client, cx: i32, cy: i32) void {
     const fb = output.drawBuffer();
     if (fb.data.len == 0) return;
+    // Intentar cursor del cliente
     for (clients) |*slot| {
         const cl = slot.* orelse continue;
         if (cl.cursor_surface_id == 0) continue;
@@ -400,6 +401,45 @@ fn blitCursor(output: *drm.Output, surfaces: *wayland.SurfaceManager, clients: [
             surf.y = cy - cl.cursor_hotspot_y;
             surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
             return;
+        }
+    }
+    // Fallback: flecha de software
+    drawArrowCursor(output, cx, cy);
+}
+
+fn drawArrowCursor(output: *drm.Output, cx: i32, cy: i32) void {
+    const fb = output.drawBuffer();
+    if (fb.data.len == 0) return;
+    const W: i32 = @intCast(output.width);
+    const H: i32 = @intCast(output.height);
+    const pitch: i32 = @intCast(fb.pitch / 4);
+    const px: [*]u32 = @ptrCast(@alignCast(fb.data.ptr));
+    const arrow = [16][13]u2{
+        .{ 2,0,0,0,0,0,0,0,0,0,0,0,0 },
+        .{ 2,2,0,0,0,0,0,0,0,0,0,0,0 },
+        .{ 2,1,2,0,0,0,0,0,0,0,0,0,0 },
+        .{ 2,1,1,2,0,0,0,0,0,0,0,0,0 },
+        .{ 2,1,1,1,2,0,0,0,0,0,0,0,0 },
+        .{ 2,1,1,1,1,2,0,0,0,0,0,0,0 },
+        .{ 2,1,1,1,1,1,2,0,0,0,0,0,0 },
+        .{ 2,1,1,1,1,1,1,2,0,0,0,0,0 },
+        .{ 2,1,1,1,1,1,1,1,2,0,0,0,0 },
+        .{ 2,1,1,2,0,0,0,0,0,0,0,0,0 },
+        .{ 2,1,1,2,0,0,0,0,0,0,0,0,0 },
+        .{ 2,1,1,2,0,0,0,0,0,0,0,0,0 },
+        .{ 2,1,1,2,0,0,0,0,0,0,0,0,0 },
+        .{ 2,1,1,2,0,0,0,0,0,0,0,0,0 },
+        .{ 2,1,1,2,0,0,0,0,0,0,0,0,0 },
+        .{ 0,2,2,2,0,0,0,0,0,0,0,0,0 },
+    };
+    for (arrow, 0..) |row, dy| {
+        for (row, 0..) |v, dx| {
+            if (v == 0) continue;
+            const x = cx + @as(i32, @intCast(dx));
+            const y = cy + @as(i32, @intCast(dy));
+            if (x < 0 or y < 0 or x >= W or y >= H) continue;
+            const color: u32 = if (v == 1) 0xFFFFFFFF else 0xFF000000;
+            px[@intCast(y * pitch + x)] = color;
         }
     }
 }
