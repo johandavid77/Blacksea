@@ -292,7 +292,16 @@ fn drawFrame(output: *drm.Output, mode: LayoutMode, cx: u32, cy: u32) void {
     var fake_fb = real_fb.*;
         fake_fb.data = real_fb.data;
     const fb = &fake_fb;
-    fb.clear(Colors.background);
+    if (wallpaper_data) |wp| {
+        const fb_px: [*]u32 = @ptrCast(@alignCast(fb.data.ptr));
+        const sw = @min(wallpaper_w, output.width);
+        const sh = @min(wallpaper_h, output.height);
+        const pitch: u32 = @intCast(fb.pitch / 4);
+        var wy: u32 = 0;
+        while (wy < sh) : (wy += 1) {
+            @memcpy(fb_px[wy*pitch..wy*pitch+sw], wp[wy*wallpaper_w..wy*wallpaper_w+sw]);
+        }
+    } else fb.clear(Colors.background);
     fb.fillRect(0, 0, output.width, 32, Colors.surface);
     fb.fillRect(0, 32, output.width, 1, Colors.accent);
     const mc: u32 = if (mode == .scrolling) Colors.accent else 0xFF3FB950;
@@ -305,6 +314,10 @@ fn drawFrame(output: *drm.Output, mode: LayoutMode, cx: u32, cy: u32) void {
 
 var back_pixels: [1280 * 800]u32 = std.mem.zeroes([1280 * 800]u32);
 var g_start_ms: u64 = 0;
+var wallpaper_data: ?[]u32 = null;
+var wallpaper_w: u32 = 0;
+var wallpaper_h: u32 = 0;
+var wp_buf: [1280*800]u32 = undefined;
 
 
 fn applyTiling(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
