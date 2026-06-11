@@ -328,14 +328,14 @@ fn applyTiling(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
     // Contar ventanas mapeadas con xdg_toplevel
     var count: u32 = 0;
     for (&surfaces.surfaces) |*s| {
-        if (s.mapped and s.buffer != null) count += 1;
+        if (s.mapped and s.buffer != null and s.xdg_toplevel_id > 0) count += 1;
     }
     if (count == 0) return;
 
     const gap: i32 = 6;
     var idx: u32 = 0;
     for (&surfaces.surfaces) |*s| {
-        if (!s.mapped or s.buffer == null) continue;
+        if (!s.mapped or s.buffer == null or s.xdg_toplevel_id == 0) continue;
         if (count == 1) {
             s.x = gap;
             s.y = bar + gap;

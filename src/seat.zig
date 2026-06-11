@@ -127,6 +127,16 @@ pub fn sendKeymap(fd: i32, keyboard_id: u32) void {
 }
 
 /// Enviar wl_keyboard.enter (el cliente recibe el foco)
+/// Enviar wl_keyboard.leave (opcode 1)
+pub fn sendKeyboardLeave(fd: i32, keyboard_id: u32, surface_id: u32, serial: u32) void {
+    var p: [12]u8 = undefined;
+    writeU32(&p, 0, serial);
+    writeU32(&p, 4, surface_id);
+    writeU32(&p, 8, 0); // keys array len = 0
+    sendEvent(fd, keyboard_id, 1, &p);
+    std.log.info("wl_keyboard leave surface={}", .{surface_id});
+}
+
 pub fn sendKeyboardEnter(fd: i32, keyboard_id: u32, surface_id: u32, serial: u32) void {
     // payload: serial(u32) + surface(u32) + keys_array_len(u32) = 12 bytes
     var p: [12]u8 = undefined;

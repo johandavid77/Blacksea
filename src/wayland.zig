@@ -486,15 +486,34 @@ pub const Server = struct {
             }
             if (min_id < 0xFFFFFFFF) surf_id = min_id;
             _ = self.xdg.createToplevel(toplevel_id, object_id, surf_id, client.fd);
+            if (self.surfaces.getSurface(surf_id, client.fd)) |s| {
+                s.xdg_toplevel_id = toplevel_id;
+            }
             // Enviar toplevel configure + xdg_surface configure
             xdg_mod.sendToplevelConfigure(client.fd, toplevel_id, 630, 729);
             self.serial += 1;
             xdg_mod.sendXdgSurfaceConfigure(client.fd, object_id, self.serial);
-            // Keyboard enter al momento de crear toplevel
-            if (client.keyboard_id > 0 and !client.keyboard_given and
-                (self.focused_fd == -1 or self.focused_fd == client.fd)) {
-                self.focused_fd = client.fd;
+            // Leave al cliente anterior si hay foco activo
+            if (self.focused_fd != -1 and self.focused_fd != client.fd) {
+                for (&self.clients) |*slot2| {
+                    if (slot2.*) |*cl2| {
+                        if (cl2.fd == self.focused_fd and cl2.keyboard_id > 0) {
+                            // Buscar surf_id del cliente anterior
+                            for (self.surfaces.surfaces) |s2| {
+                                if (s2.xdg_toplevel_id > 0 and s2.client_fd == cl2.fd) {
+                                    self.serial += 1;
+                                    seat_mod.sendKeyboardLeave(cl2.fd, cl2.keyboard_id, s2.id, self.serial);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Keyboard enter al crear toplevel — siempre enviar para que foot pinte
+            if (client.keyboard_id > 0 and !client.keyboard_given) {
                 client.keyboard_given = true;
+                if (self.focused_fd == -1) self.focused_fd = client.fd;
                 self.serial += 1;
                 seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, surf_id, self.serial);
                 seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
