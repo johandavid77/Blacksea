@@ -97,18 +97,55 @@ pub fn main() !void {
                             var ts_b: std.os.linux.timespec = undefined;
                             _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts_b);
                             const ms_b: u32 = @truncate(@as(u64,@intCast(ts_b.sec))*1000+@as(u64,@intCast(ts_b.nsec))/1_000_000);
+                            // Focus-on-click
+                            if (ev.value == 1 and ev.code == evdev.BTN_LEFT) {
+                                focus: for (&srv.clients) |*slot2| {
+                                    if (slot2.*) |*cl2| {
+                                        for (srv.surfaces.surfaces) |s| {
+                                            if (s.id == 0 or !s.mapped or s.xdg_toplevel_id == 0) continue;
+                                            if (s.client_fd != cl2.fd) continue;
+                                            if (cursor_x >= s.x and cursor_x < s.x + @as(i32,@intCast(s.width)) and
+                                                cursor_y >= s.y and cursor_y < s.y + @as(i32,@intCast(s.height))) {
+                                                if (srv.focused_fd != cl2.fd) {
+                                                    // Leave al anterior
+                                                    for (&srv.clients) |*slot3| {
+                                                        if (slot3.*) |*cl3| {
+                                                            if (cl3.fd == srv.focused_fd and cl3.keyboard_id > 0) {
+                                                                for (srv.surfaces.surfaces) |s3| {
+                                                                    if (s3.xdg_toplevel_id > 0 and s3.client_fd == cl3.fd) {
+                                                                        srv.serial += 1;
+                                                                        seat_mod.sendKeyboardLeave(cl3.fd, cl3.keyboard_id, s3.id, srv.serial);
+                                                                        break;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    srv.focused_fd = cl2.fd;
+                                                    // Enter al nuevo
+                                                    if (cl2.keyboard_id > 0) {
+                                                        srv.serial += 1;
+                                                        seat_mod.sendKeyboardEnter(cl2.fd, cl2.keyboard_id, s.id, srv.serial);
+                                                        seat_mod.sendModifiers(cl2.fd, cl2.keyboard_id, srv.serial, 0, 0, 0, 0);
+                                                    }
+                                                    std.log.info("focus -> fd={}", .{cl2.fd});
+                                                }
+                                                break :focus;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             for (&srv.clients) |*slot| {
                                 if (slot.*) |*cl| {
                                     if (cl.pointer_id == 0) continue;
                                     if (cl.pointer_surface_id == 0) continue;
-                                    // button event via cl.sendEvent (atomic)
                                     srv.serial += 1;
                                     const btn: u32 = 0x110 + @as(u32, ev.code - evdev.BTN_LEFT);
                                     var bp = wayland.MsgBuf{};
                                     bp.uint(srv.serial); bp.uint(ms_b);
                                     bp.uint(btn); bp.uint(@intCast(ev.value));
-                                    cl.sendEvent(cl.pointer_id, 3, bp.slice()); // button
-                                    // frame omitido
+                                    cl.sendEvent(cl.pointer_id, 3, bp.slice());
                                 }
                             }
                         }
