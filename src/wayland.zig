@@ -486,7 +486,17 @@ pub const Server = struct {
             if (min_id < 0xFFFFFFFF) surf_id = min_id;
             _ = self.xdg.createToplevel(toplevel_id, object_id, surf_id, client.fd);
             // Enviar toplevel configure + xdg_surface configure
-            xdg_mod.sendToplevelConfigure(client.fd, toplevel_id, 1280, 768);
+                // Tiling dimensions: master=full, stack=half
+                const tW: u32 = 1280; const tH: u32 = 768;
+                const tbar: u32 = 33; const tgap: u32 = 6;
+                var n_cl: u32 = 0;
+                for (self.clients) |sl| { if (sl != null) n_cl += 1; }
+                var min_fd3: i32 = 0x7fffffff;
+                for (self.clients) |sl| { if (sl) |cl3| { if (cl3.fd < min_fd3) min_fd3 = cl3.fd; } }
+                const is_master = (n_cl <= 1 or client.fd == min_fd3);
+                const cfg_w: u32 = if (is_master) tW - tgap*2 else tW/2 - tgap - tgap/2;
+                const cfg_h: u32 = tH - tbar - tgap*2;
+                xdg_mod.sendToplevelConfigure(client.fd, toplevel_id, cfg_w, cfg_h);
             self.serial += 1;
             xdg_mod.sendXdgSurfaceConfigure(client.fd, object_id, self.serial);
                     for (&self.surfaces.surfaces) |*s| {
