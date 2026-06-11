@@ -448,17 +448,7 @@ pub const Server = struct {
         if (object_id == client.seat_id and opcode == 1 and payload.len >= 4) {
             client.keyboard_id = readUint(payload, 0);
             seat_mod.sendKeymap(client.fd, client.keyboard_id);
-            // Enviar enter si hay superficie activa
-            for (self.surfaces.surfaces) |s| {
-                if (s.id > 0 and s.client_fd == client.fd and s.mapped) {
-                    if (self.focused_fd == -1 or self.focused_fd == client.fd) {
-                        self.serial += 1;
-                        seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, s.id, self.serial);
-                        if (self.focused_fd == -1) self.focused_fd = client.fd;
-                        break;
-                    }
-                }
-            }
+            // enter se envía en wl_surface.commit cuando toplevel está listo
             return;
         }
 
@@ -499,12 +489,6 @@ pub const Server = struct {
             xdg_mod.sendToplevelConfigure(client.fd, toplevel_id, 1280, 768);
             self.serial += 1;
             xdg_mod.sendXdgSurfaceConfigure(client.fd, object_id, self.serial);
-                // Keyboard enter al crear toplevel
-                if (client.keyboard_id > 0 and surf_id > 0) {
-                    self.serial += 1;
-                    seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, surf_id, self.serial);
-                    if (self.focused_fd == -1) self.focused_fd = client.fd;
-                    seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
                     for (&self.surfaces.surfaces) |*s| {
                         if (s.id == surf_id) { s.keyboard_entered = true; break; }
                     }
@@ -592,9 +576,11 @@ pub const Server = struct {
                         surf.pending_buf = null;
                         std.log.info("surface {} commit {}x{}", .{object_id, pb.width, pb.height});
                         // Solo ventanas con toplevel reciben foco de teclado
-                        if (client.keyboard_id > 0 and !surf.keyboard_entered and surf.xdg_toplevel_id > 0) {
+                        if (client.keyboard_id > 0 and !client.keyboard_given and surf.xdg_toplevel_id > 0 and (self.focused_fd == -1 or self.focused_fd == client.fd)) {
                             self.serial += 1;
+                    client.keyboard_given = true;
                             seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, object_id, self.serial);
+                    self.focused_fd = client.fd;
                         if (self.focused_fd == -1) self.focused_fd = client.fd;
                     surf.keyboard_entered = true;
                     seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
