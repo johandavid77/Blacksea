@@ -22,7 +22,8 @@ pub const Config = struct {
         const cpath = try std.fmt.bufPrintZ(&buf, "{s}", .{path});
 
         if (c.luaL_dofile(L, cpath.ptr) != 0) {
-            const err = c.lua_tolstring(L, -1, null).?;
+            const err_ptr = c.lua_tolstring(L, -1, null);
+            const err: [*:0]const u8 = if (err_ptr) |p| @as([*:0]const u8, @ptrCast(p)) else "unknown";
             std.log.warn("config error: {s}", .{err});
             return; // usar defaults
         }
@@ -42,7 +43,8 @@ pub const Config = struct {
         // wallpaper_path
         _ = c.lua_getglobal(L, "wallpaper");
         if (c.lua_isstring(L, -1) != 0) {
-            const s = c.lua_tolstring(L, -1, null).?;
+            const s_ptr = c.lua_tolstring(L, -1, null) orelse return;
+            const s: [*:0]const u8 = @as([*:0]const u8, @ptrCast(s_ptr));
             const slen = std.mem.len(s);
             const copy_len = @min(slen, 255);
             @memcpy(self.wallpaper_path[0..copy_len], s[0..copy_len]);

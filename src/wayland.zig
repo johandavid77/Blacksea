@@ -489,8 +489,36 @@ pub const Server = struct {
             if (self.surfaces.getSurface(surf_id, client.fd)) |s| {
                 s.xdg_toplevel_id = toplevel_id;
             }
+            // Contar clientes activos con toplevel para calcular dimensiones
+            var n_tops: u32 = 0;
+            for (self.surfaces.surfaces) |s2| {
+                if (s2.xdg_toplevel_id > 0 and s2.mapped) n_tops += 1;
+            }
+            n_tops += 1; // incluir este nuevo
+            const W: u32 = 1280; const H: u32 = 768;
+            const bar: u32 = 33; const gap: u32 = 6;
+            // Re-configure al master existente si ahora hay 2
+            if (n_tops == 2) {
+                for (self.surfaces.surfaces) |s2| {
+                    if (s2.xdg_toplevel_id > 0 and s2.mapped and s2.client_fd != client.fd) {
+                        for (&self.clients) |*slot2| {
+                            if (slot2.*) |*cl2| {
+                                if (cl2.fd == s2.client_fd) {
+                                    xdg_mod.sendToplevelConfigure(cl2.fd, s2.xdg_toplevel_id, W/2 - gap - gap/2, H - bar - gap*2);
+                                    self.serial += 1;
+                                    xdg_mod.sendXdgSurfaceConfigure(cl2.fd, s2.id, self.serial);
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            const is_master = (n_tops == 1);
+            const cfg_w: u32 = if (is_master) W - gap*2 else W/2 - gap - gap/2;
+            const cfg_h: u32 = H - bar - gap*2;
             // Enviar toplevel configure + xdg_surface configure
-            xdg_mod.sendToplevelConfigure(client.fd, toplevel_id, 630, 729);
+            xdg_mod.sendToplevelConfigure(client.fd, toplevel_id, cfg_w, cfg_h);
             self.serial += 1;
             xdg_mod.sendXdgSurfaceConfigure(client.fd, object_id, self.serial);
             // Leave al cliente anterior si hay foco activo
