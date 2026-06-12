@@ -85,8 +85,12 @@ pub fn main() !void {
     var last_render_ms: u64 = 0;
 
     // Cargar wallpaper PPM
+    // Cargar config Lua
+    var cfg = config_mod.Config{};
+    cfg.load("/home/johan/.config/blacksea/init.lua") catch {};
+
     load_wp: {
-        const wp_fd_r = linux.open("/home/johan/blacksea/assets/wallpaper.ppm", .{ .ACCMODE = .RDONLY }, 0);
+        const wp_fd_r = linux.open(&cfg.wallpaper_path, .{ .ACCMODE = .RDONLY }, 0);
         const wp_fd: i32 = @bitCast(@as(u32, @truncate(wp_fd_r)));
         if (wp_fd < 0) { std.log.err("wp open failed: {}", .{wp_fd}); break :load_wp; }
         defer _ = linux.close(@intCast(wp_fd));

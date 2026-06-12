@@ -11,6 +11,7 @@ pub const Config = struct {
     border_color:  u32  = 0xFF4A90D9,
     gap:           u32  = 8,
     mod_key:       []const u8 = "super",
+    wallpaper_path: [256]u8 = [_]u8{0} ** 256,
 
     pub fn load(self: *Config, path: []const u8) !void {
         const L = c.luaL_newstate() orelse return error.LuaInit;
@@ -21,7 +22,7 @@ pub const Config = struct {
         const cpath = try std.fmt.bufPrintZ(&buf, "{s}", .{path});
 
         if (c.luaL_dofile(L, cpath.ptr) != 0) {
-            const err = c.lua_tostring(L, -1);
+            const err = c.lua_tolstring(L, -1, null).?;
             std.log.warn("config error: {s}", .{err});
             return; // usar defaults
         }
@@ -38,6 +39,16 @@ pub const Config = struct {
             self.gap = @intCast(c.lua_tointeger(L, -1));
         c.lua_pop(L, 1);
 
+        // wallpaper_path
+        _ = c.lua_getglobal(L, "wallpaper");
+        if (c.lua_isstring(L, -1) != 0) {
+            const s = c.lua_tolstring(L, -1, null).?;
+            const slen = std.mem.len(s);
+            const copy_len = @min(slen, 255);
+            @memcpy(self.wallpaper_path[0..copy_len], s[0..copy_len]);
+            self.wallpaper_path[copy_len] = 0;
+        }
+        c.lua_pop(L, 1);
         std.log.info("config: border={} gap={}", .{self.border_width, self.gap});
     }
 };
