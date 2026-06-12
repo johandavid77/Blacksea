@@ -380,6 +380,16 @@ fn drawFrame(output: *drm.Output, mode: LayoutMode, cx: u32, cy: u32) void {
     } else fb.clear(Colors.background);
     fb.fillRect(0, 0, output.width, 32, Colors.surface);
     fb.fillRect(0, 32, output.width, 1, Colors.accent);
+    // Hora en la barra
+    var ts_now: std.os.linux.timespec = undefined;
+    _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.REALTIME, &ts_now);
+    const secs = @as(u64, @intCast(ts_now.sec));
+    const hh: u64 = (secs % 86400) / 3600;
+    const mm: u64 = (secs % 3600) / 60;
+    const ss: u64 = secs % 60;
+    var tbuf: [16]u8 = undefined;
+    const tstr = std.fmt.bufPrint(&tbuf, "{d:0>2}:{d:0>2}:{d:0>2}", .{hh, mm, ss}) catch "??:??:??";
+    fb.drawText(output.width / 2 -| 24, 12, tstr, Colors.white, Colors.surface);
     const mc: u32 = if (mode == .scrolling) Colors.accent else 0xFF3FB950;
     fb.fillRect(8, 8, 16, 16, mc);
     if (cy > 32) {
