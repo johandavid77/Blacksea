@@ -81,22 +81,27 @@ pub const SurfaceManager = struct {
     }
 
     pub fn createSurface(self: *SurfaceManager, id: u32, client_fd: i32) ?*Surface {
+        // Verificar si ya existe para este cliente
+        for (&self.surfaces) |*s| {
+            if (s.id == id and s.client_fd == client_fd) return s;
+        }
+        // Buscar slot vacío
         for (&self.surfaces) |*s| {
             if (s.id == 0) {
                 s.* = std.mem.zeroes(Surface);
                 s.id = id;
                 s.client_fd = client_fd;
                 self.count += 1;
-                std.log.info("surface: creada id={}", .{id});
+                std.log.info("surface: creada id={} fd={}", .{id, client_fd});
                 return s;
             }
         }
         return null;
     }
 
-    pub fn getSurface(self: *SurfaceManager, id: u32) ?*Surface {
+    pub fn getSurface(self: *SurfaceManager, id: u32, client_fd: i32) ?*Surface {
         for (&self.surfaces) |*s| {
-            if (s.id == id) return s;
+            if (s.id == id and s.client_fd == client_fd) return s;
         }
         return null;
     }

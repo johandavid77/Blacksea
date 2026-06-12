@@ -80,8 +80,48 @@ pub fn main() !void {
     var mode      : LayoutMode = .scrolling;
     var cursor_x   : i32 = @intCast(output.width  / 2);
     var cursor_y   : i32 = @intCast(output.height / 2);
-    var dirty      = false;
+    var dirty          = false;
+    var pointer_moved  = false;
     var last_render_ms: u64 = 0;
+
+    // Cargar wallpaper PPM
+    // Cargar config Lua
+    var cfg = config_mod.Config{};
+    cfg.load("/home/johan/.config/blacksea/init.lua") catch {};
+
+    load_wp: {
+        const wp_fd_r = linux.open(&cfg.wallpaper_path, .{ .ACCMODE = .RDONLY }, 0);
+        const wp_fd: i32 = @bitCast(@as(u32, @truncate(wp_fd_r)));
+        if (wp_fd < 0) { std.log.err("wp open failed: {}", .{wp_fd}); break :load_wp; }
+        defer _ = linux.close(@intCast(wp_fd));
+        // Leer header línea a línea
+        var hdr: [128]u8 = undefined;
+        var hpos: usize = 0;
+        // Leer byte a byte hasta newline para P6
+        var b: [1]u8 = undefined;
+        hpos = 0;
+        while (hpos < 3) { _ = linux.read(@intCast(wp_fd), &b, 1); if (b[0] == '\n') break; hdr[hpos] = b[0]; hpos += 1; }
+        if (!std.mem.eql(u8, hdr[0..2], "P6")) { std.log.err("wp not P6", .{}); break :load_wp; }
+        // Leer WxH
+        hpos = 0;
+        while (hpos < 63) { _ = linux.read(@intCast(wp_fd), &b, 1); if (b[0] == '\n') break; hdr[hpos] = b[0]; hpos += 1; }
+        var it = std.mem.tokenizeScalar(u8, hdr[0..hpos], ' ');
+        wallpaper_w = std.fmt.parseInt(u32, it.next() orelse break :load_wp, 10) catch break :load_wp;
+        wallpaper_h = std.fmt.parseInt(u32, it.next() orelse break :load_wp, 10) catch break :load_wp;
+        // Leer maxval line
+        while (true) { const nr = linux.read(@intCast(wp_fd), &b, 1); if (nr <= 0 or b[0] == '\n') break; }
+        // Leer pixels
+        var rgb: [3]u8 = undefined;
+        const total = wallpaper_w * wallpaper_h;
+        var pi: u32 = 0;
+        while (pi < total) : (pi += 1) {
+            var got: usize = 0;
+            while (got < 3) { const nr = linux.read(@intCast(wp_fd), rgb[got..].ptr, 3-got); if (nr <= 0) break :load_wp; got += @intCast(nr); }
+            wp_buf[pi] = 0xFF000000|(@as(u32,rgb[0])<<16)|(@as(u32,rgb[1])<<8)|rgb[2];
+        }
+        wallpaper_data = wp_buf[0..total];
+        std.log.info("wallpaper: {}x{}", .{wallpaper_w, wallpaper_h});
+    }
 
     while (running) {
         // ── Input ────────────────────────────────────────────────────────
@@ -90,6 +130,67 @@ pub fn main() !void {
             while (std.posix.read(dev.fd, std.mem.asBytes(&ev))) |n| {
                 if (n < @sizeOf(evdev.InputEvent)) break;
                 if (ev.type == evdev.EV_KEY) {
+                    // Mouse buttons
+                    if (ev.code == evdev.BTN_LEFT or ev.code == evdev.BTN_RIGHT or ev.code == evdev.BTN_MIDDLE) {
+                        if (wl_server) |*srv| {
+                            var ts_b: std.os.linux.timespec = undefined;
+                            _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts_b);
+                            const ms_b: u32 = @truncate(@as(u64,@intCast(ts_b.sec))*1000+@as(u64,@intCast(ts_b.nsec))/1_000_000);
+                            // Focus-on-click
+                            if (ev.value == 1 and ev.code == evdev.BTN_LEFT) {
+                                focus: for (&srv.clients) |*slot2| {
+                                    if (slot2.*) |*cl2| {
+                                        for (srv.surfaces.surfaces) |s| {
+                                            if (s.id == 0 or !s.mapped or s.xdg_toplevel_id == 0) continue;
+                                            if (s.client_fd != cl2.fd) continue;
+                                            if (cursor_x >= s.x and cursor_x < s.x + @as(i32,@intCast(s.width)) and
+                                                cursor_y >= s.y and cursor_y < s.y + @as(i32,@intCast(s.height))) {
+                                                if (srv.focused_fd != cl2.fd) {
+                                                    // Leave al anterior
+                                                    for (&srv.clients) |*slot3| {
+                                                        if (slot3.*) |*cl3| {
+                                                            if (cl3.fd == srv.focused_fd and cl3.keyboard_id > 0) {
+                                                                for (srv.surfaces.surfaces) |s3| {
+                                                                    if (s3.xdg_toplevel_id > 0 and s3.client_fd == cl3.fd) {
+                                                                        srv.serial += 1;
+                                                                        seat_mod.sendKeyboardLeave(cl3.fd, cl3.keyboard_id, s3.id, srv.serial);
+                                                                        break;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    srv.focused_fd = cl2.fd;
+                                                    // Enter al nuevo
+                                                    if (cl2.keyboard_id > 0) {
+                                                        srv.serial += 1;
+                                                        seat_mod.sendKeyboardEnter(cl2.fd, cl2.keyboard_id, s.id, srv.serial);
+                                                        seat_mod.sendModifiers(cl2.fd, cl2.keyboard_id, srv.serial, 0, 0, 0, 0);
+                                                    }
+                                                    std.log.info("focus -> fd={}", .{cl2.fd});
+                                                }
+                                                break :focus;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            for (&srv.clients) |*slot| {
+                                if (slot.*) |*cl| {
+                                    if (cl.pointer_id == 0) continue;
+                                    if (cl.pointer_surface_id == 0) continue;
+                                    srv.serial += 1;
+                                    const btn: u32 = 0x110 + @as(u32, ev.code - evdev.BTN_LEFT);
+                                    var bp = wayland.MsgBuf{};
+                                    bp.uint(srv.serial); bp.uint(ms_b);
+                                    bp.uint(btn); bp.uint(@intCast(ev.value));
+                                    cl.sendEvent(cl.pointer_id, 3, bp.slice());
+                                }
+                            }
+                        }
+                        dirty = true;
+                        continue;
+                    }
                     const p = ev.value == evdev.KEY_PRESSED;
                     switch (ev.code) {
                         evdev.KEY_SUPER                           => input.mods.super = p,
@@ -107,7 +208,7 @@ pub fn main() !void {
                     const key_state: u32 = if (ev.value == evdev.KEY_PRESSED) 1 else 0;
                     for (&srv.clients) |*slot| {
                         if (slot.*) |*cl| {
-                            if (cl.keyboard_id > 0) {
+                            if (cl.keyboard_id > 0 and cl.fd == srv.focused_fd) {
                                 srv.serial += 1;
                                 var ts: std.os.linux.timespec = undefined;
                                 _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
@@ -122,9 +223,10 @@ pub fn main() !void {
                 }
                 }
                 if (ev.type == evdev.EV_ABS) {
-                    if (ev.code == evdev.ABS_X) cursor_x = @intCast(@divTrunc(@as(i64, ev.value) * @as(i64, @intCast(output.width)),  65535));
-                    if (ev.code == evdev.ABS_Y) cursor_y = @intCast(@divTrunc(@as(i64, ev.value) * @as(i64, @intCast(output.height)), 65535));
+                    if (ev.code == evdev.ABS_X) cursor_x = @intCast(@divTrunc(@as(i64,ev.value)*@as(i64,@intCast(output.width)), 65535));
+                    if (ev.code == evdev.ABS_Y) cursor_y = @intCast(@divTrunc(@as(i64,ev.value)*@as(i64,@intCast(output.height)), 65535));
                     dirty = true;
+                    pointer_moved = true;
                 }
                 if (ev.type == evdev.EV_REL) {
                     if (ev.code == evdev.REL_X) cursor_x = @max(0, @min(@as(i32,@intCast(output.width))-1,  cursor_x+ev.value));
@@ -157,9 +259,97 @@ pub fn main() !void {
         // ── Render ───────────────────────────────────────────────────────
         if (dirty) {
             drawFrame(output, mode, @intCast(cursor_x), @intCast(cursor_y));
-            if (wl_server) |*s| blitSurfaces(output, &s.surfaces, mode);
+            if (wl_server) |*s| {
+                blitSurfaces(output, &s.surfaces, mode);
+                // Bordes con esquinas redondeadas
+                const bw2: u32 = 2;
+                const bc2: u32 = 0xFF4A90D9;
+                if (bw2 > 0) {
+                    for (&s.surfaces.surfaces) |*surf| {
+                        if (surf.id == 0 or !surf.mapped) continue;
+                        if (surf.width == 0 or surf.height == 0) continue;
+                        const area: u64 = @as(u64,@intCast(surf.width))*@as(u64,@intCast(@abs(surf.height)));
+                        if (area < 100000) continue; // solo ventanas principales
+                        drawBorder(output, surf, bw2, bc2);
+                    }
+                }
+                blitCursor(output, &s.surfaces, &s.clients, cursor_x, cursor_y);
+            }
             try output.pageFlip(device.fd);
+            // Pointer enter/leave
+            if (wl_server) |*srv| {
+                for (&srv.clients) |*slot| {
+                    if (slot.*) |*cl| {
+                        if (cl.pointer_id == 0 or !pointer_moved) continue;
+                        var sid: u32 = 0;
+                        for (srv.surfaces.surfaces) |s| {
+                            if (s.id > 0 and s.mapped and s.client_fd == cl.fd and
+                                s.width > 0 and s.height > 0 and
+                                cursor_x >= s.x and cursor_x < s.x+@as(i32,@intCast(s.width)) and
+                                cursor_y >= s.y and cursor_y < s.y+@as(i32,@intCast(s.height)))
+                                sid = s.id;
+                        }
+                        if (sid == cl.pointer_surface_id) {
+                            // motion dentro de la misma surface
+                            if (sid > 0 and pointer_moved) {
+                                var rx: i32 = cursor_x; var ry: i32 = cursor_y;
+                                for (srv.surfaces.surfaces) |s| { if (s.id==sid) { rx=cursor_x-s.x; ry=cursor_y-s.y; break; } }
+                                var ts_m: std.os.linux.timespec = undefined;
+                                _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts_m);
+                                const ms_m: u32 = @truncate(@as(u64,@intCast(ts_m.sec))*1000+@as(u64,@intCast(ts_m.nsec))/1_000_000);
+                                var mo = wayland.MsgBuf{};
+                                mo.uint(ms_m);
+                                mo.uint(@bitCast(rx << 8));
+                                mo.uint(@bitCast(ry << 8));
+                                cl.sendEvent(cl.pointer_id, 2, mo.slice()); // motion
+                            }
+                            continue;
+                        }
+                        // Solo procesar si el cursor tiene posicion valida
+                        if (cursor_x < 0 or cursor_y < 0) continue;
+                        // Guard: cliente debe haber completado al menos un render cycle
+                        if (cl.needs_blit or cl.frame_cb_id > 0) continue;
+                        if (cl.pointer_surface_id > 0) {
+                            srv.serial += 1;
+                            var lv = wayland.MsgBuf{};
+                            lv.uint(srv.serial); lv.uint(cl.pointer_surface_id);
+                            cl.sendEvent(cl.pointer_id, 1, lv.slice()); // leave
+                            cl.sendEvent(cl.pointer_id, 5, &[_]u8{});
+                        }
+                        cl.pointer_surface_id = sid;
+                        if (sid > 0) {
+                            const rx: i32 = cursor_x - (for (srv.surfaces.surfaces) |s| { if (s.id==sid) break s.x; } else 0);
+                            const ry: i32 = cursor_y - (for (srv.surfaces.surfaces) |s| { if (s.id==sid) break s.y; } else 0);
+                            srv.serial += 1;
+                            var en = wayland.MsgBuf{};
+                            en.uint(srv.serial); en.uint(sid);
+                            en.fixed(rx); en.fixed(ry);
+                            cl.sendEvent(cl.pointer_id, 0, en.slice());
+                            cl.sendEvent(cl.pointer_id, 5, &[_]u8{});
+                        }
+                    }
+                }
+                if (pointer_moved) pointer_moved = false;
+            }
 
+
+
+            if (wl_server) |*srv| {
+                for (&srv.clients) |*slot| {
+                    if (slot.*) |*cl| {
+                        if (cl.frame_cb_id > 0) {
+                            var ts3: std.os.linux.timespec = undefined;
+                            _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts3);
+                            const ms3: u32 = @truncate(@as(u64, @intCast(ts3.sec)) * 1000 + @as(u64, @intCast(ts3.nsec)) / 1_000_000);
+                            var fcb = wayland.MsgBuf{};
+                            fcb.uint(ms3);
+                            cl.sendEvent(cl.frame_cb_id, 0, fcb.slice());
+                            cl.frame_cb_id = 0;
+                        cl.needs_blit = true;
+                        }
+                    }
+                }
+            }
             var _t2: std.os.linux.timespec = undefined;
             _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &_t2);
             last_render_ms = @as(u64,@intCast(_t2.sec))*1000 + @as(u64,@intCast(_t2.nsec))/1_000_000;
@@ -178,9 +368,28 @@ fn drawFrame(output: *drm.Output, mode: LayoutMode, cx: u32, cy: u32) void {
     var fake_fb = real_fb.*;
         fake_fb.data = real_fb.data;
     const fb = &fake_fb;
-    fb.clear(Colors.background);
+    if (wallpaper_data) |wp| {
+        const fb_px: [*]u32 = @ptrCast(@alignCast(fb.data.ptr));
+        const sw = @min(wallpaper_w, output.width);
+        const sh = @min(wallpaper_h, output.height);
+        const pitch: u32 = @intCast(fb.pitch / 4);
+        var wy: u32 = 0;
+        while (wy < sh) : (wy += 1) {
+            @memcpy(fb_px[wy*pitch..wy*pitch+sw], wp[wy*wallpaper_w..wy*wallpaper_w+sw]);
+        }
+    } else fb.clear(Colors.background);
     fb.fillRect(0, 0, output.width, 32, Colors.surface);
     fb.fillRect(0, 32, output.width, 1, Colors.accent);
+    // Hora en la barra
+    var ts_now: std.os.linux.timespec = undefined;
+    _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.REALTIME, &ts_now);
+    const secs = @as(u64, @intCast(ts_now.sec));
+    const hh: u64 = (secs % 86400) / 3600;
+    const mm: u64 = (secs % 3600) / 60;
+    const ss: u64 = secs % 60;
+    var tbuf: [16]u8 = undefined;
+    const tstr = std.fmt.bufPrint(&tbuf, "{d:0>2}:{d:0>2}:{d:0>2}", .{hh, mm, ss}) catch "??:??:??";
+    fb.drawText(output.width / 2 -| 24, 12, tstr, Colors.white, Colors.surface);
     const mc: u32 = if (mode == .scrolling) Colors.accent else 0xFF3FB950;
     fb.fillRect(8, 8, 16, 16, mc);
     if (cy > 32) {
@@ -191,6 +400,10 @@ fn drawFrame(output: *drm.Output, mode: LayoutMode, cx: u32, cy: u32) void {
 
 var back_pixels: [1280 * 800]u32 = std.mem.zeroes([1280 * 800]u32);
 var g_start_ms: u64 = 0;
+var wallpaper_data: ?[]u32 = null;
+var wallpaper_w: u32 = 0;
+var wallpaper_h: u32 = 0;
+var wp_buf: [1280*800]u32 = undefined;
 
 
 fn applyTiling(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
@@ -201,14 +414,14 @@ fn applyTiling(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
     // Contar ventanas mapeadas con xdg_toplevel
     var count: u32 = 0;
     for (&surfaces.surfaces) |*s| {
-        if (s.mapped and s.buffer != null) count += 1;
+        if (s.mapped and s.buffer != null and s.xdg_toplevel_id > 0) count += 1;
     }
     if (count == 0) return;
 
     const gap: i32 = 6;
     var idx: u32 = 0;
     for (&surfaces.surfaces) |*s| {
-        if (!s.mapped or s.buffer == null) continue;
+        if (!s.mapped or s.buffer == null or s.xdg_toplevel_id == 0) continue;
         if (count == 1) {
             s.x = gap;
             s.y = bar + gap;
@@ -236,7 +449,7 @@ fn applyTiling(output: *drm.Output, surfaces: *wayland.SurfaceManager) void {
 }
 
 fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager, mode: LayoutMode) void {
-    if (mode == .tiling) applyTiling(output, surfaces);
+    applyTiling(output, surfaces); _ = mode;
     const fb = output.drawBuffer();
     if (fb.data.len == 0) return;
     _ = @min(back_pixels.len, fb.data.len);
@@ -249,24 +462,110 @@ fn blitSurfaces(output: *drm.Output, surfaces: *wayland.SurfaceManager, mode: La
         const area: u64 = @as(u64, @intCast(buf.width)) * @as(u64, @intCast(@abs(buf.height)));
         if (area < 100000) continue; // skip decoraciones pequeñas en pasada 1
         surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
-        // Borde redondeado estilo Niri
-        const border_color: u32 = 0xFF5E81AC;
-        const bw: u32 = 2;
-        const brad: u32 = 8; // radio de esquina
-        const sx: u32 = if (surf.x > 0) @intCast(surf.x) else 0;
-        const sy: u32 = if (surf.y > 0) @intCast(surf.y) else 0;
-        const sw: u32 = @intCast(buf.width);
-        const sh: u32 = @intCast(@abs(buf.height));
-        fb.fillRoundedBorder(sx, sy, sw, sh, bw, brad, border_color);
     }
-    // Pasada 2: subsuperficies pequeñas (decoraciones CSD) encima
-    for (&surfaces.surfaces) |*surf| {
-        if (surf.id == 0 or !surf.mapped) continue;
-        const buf = surf.buffer orelse continue;
-        if (buf.fd < 0 or buf.data.len == 0) continue;
-        if (buf.width <= 0 or buf.height <= 0) continue;
-        const area: u64 = @as(u64, @intCast(buf.width)) * @as(u64, @intCast(@abs(buf.height)));
-        if (area >= 100000) continue; // ya blitadas en pasada 1
-        surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
+    // Pasada 2: subsuperficies CSD omitidas (compositor maneja decoraciones)
+}
+
+
+fn drawBorder(output: *drm.Output, surf: *surface_mod.Surface, bw: u32, color: u32) void {
+    const fb = output.drawBuffer();
+    if (fb.data.len == 0) return;
+    const W: i32 = @intCast(output.width);
+    const H: i32 = @intCast(output.height);
+    const pitch: i32 = @intCast(fb.pitch / 4);
+    const px: [*]u32 = @ptrCast(@alignCast(fb.data.ptr));
+    const x0 = surf.x;
+    const y0 = surf.y;
+    const x1 = surf.x + @as(i32, @intCast(surf.width));
+    const y1 = surf.y + @as(i32, @intCast(surf.height));
+    const b: i32 = @intCast(bw);
+    const r: i32 = 8; // corner radius
+    // Función inline: pintar pixel con clip
+    const setpx = struct {
+        fn f(p: [*]u32, x: i32, y: i32, w: i32, h: i32, pt: i32, c: u32) void {
+            if (x < 0 or y < 0 or x >= w or y >= h) return;
+            p[@intCast(y * pt + x)] = c;
+        }
+    }.f;
+    // 4 lados del borde
+    var i: i32 = 0;
+    while (i < b) : (i += 1) {
+        // top y bottom
+        var x: i32 = x0 + r;
+        while (x < x1 - r) : (x += 1) {
+            setpx(px, x, y0 - i - 1, W, H, pitch, color);
+            setpx(px, x, y1 + i,     W, H, pitch, color);
+        }
+        // left y right
+        var y: i32 = y0 + r;
+        while (y < y1 - r) : (y += 1) {
+            setpx(px, x0 - i - 1, y, W, H, pitch, color);
+            setpx(px, x1 + i,     y, W, H, pitch, color);
+        }
+        // esquinas redondeadas (arco de 90°)
+        var a: i32 = 0;
+        while (a <= r) : (a += 1) {
+            const dy: i32 = r - a;
+            const dx: i32 = @intFromFloat(@sqrt(@as(f32, @floatFromInt(r*r - dy*dy))));
+            setpx(px, x0 - i - 1 + r - dx, y0 - i - 1 + r - dy, W, H, pitch, color);
+            setpx(px, x1 + i - r + dx,     y0 - i - 1 + r - dy, W, H, pitch, color);
+            setpx(px, x0 - i - 1 + r - dx, y1 + i - r + dy,     W, H, pitch, color);
+            setpx(px, x1 + i - r + dx,     y1 + i - r + dy,     W, H, pitch, color);
+        }
+    }
+}
+
+fn blitCursor(output: *drm.Output, surfaces: *wayland.SurfaceManager, clients: []?wayland.Client, cx: i32, cy: i32) void {
+    const fb = output.drawBuffer();
+    if (fb.data.len == 0) return;
+    // Intentar cursor del cliente
+    for (clients) |*slot| {
+        const cl = slot.* orelse continue;
+        if (cl.cursor_surface_id == 0) continue;
+        for (&surfaces.surfaces) |*surf| {
+            if (surf.id != cl.cursor_surface_id or !surf.mapped) continue;
+            const buf = surf.buffer orelse continue;
+            if (buf.fd < 0 or buf.data.len == 0) continue;
+            surf.x = cx - cl.cursor_hotspot_x;
+            surf.y = cy - cl.cursor_hotspot_y;
+            surfaces.blitSurface(surf, fb.data, @intCast(output.width), @intCast(output.height), @intCast(fb.pitch));
+            return;
+        }
+    }
+    // Fallback: flecha de software
+    drawArrowCursor(output, cx, cy);
+}
+
+fn drawArrowCursor(output: *drm.Output, cx: i32, cy: i32) void {
+    const fb = output.drawBuffer();
+    if (fb.data.len == 0) return;
+    const W: i32 = @intCast(output.width);
+    const H: i32 = @intCast(output.height);
+    const pitch: i32 = @intCast(fb.pitch / 4);
+    const px: [*]u32 = @ptrCast(@alignCast(fb.data.ptr));
+    const arrow = [13][13]u2{
+        .{ 2,0,0,0,0,0,0,0,0,0,0,0,0 },
+        .{ 2,2,0,0,0,0,0,0,0,0,0,0,0 },
+        .{ 2,1,2,0,0,0,0,0,0,0,0,0,0 },
+        .{ 2,1,1,2,0,0,0,0,0,0,0,0,0 },
+        .{ 2,1,1,1,2,0,0,0,0,0,0,0,0 },
+        .{ 2,1,1,1,1,2,0,0,0,0,0,0,0 },
+        .{ 2,1,1,1,1,1,2,0,0,0,0,0,0 },
+        .{ 2,1,1,1,1,1,1,2,0,0,0,0,0 },
+        .{ 2,1,1,1,1,1,1,1,2,0,0,0,0 },
+        .{ 2,1,1,1,1,1,2,2,2,0,0,0,0 },
+        .{ 2,1,1,2,1,1,2,0,0,0,0,0,0 },
+        .{ 2,1,2,0,2,1,1,2,0,0,0,0,0 },
+        .{ 2,2,0,0,0,2,1,1,2,0,0,0,0 },
+    };
+    for (arrow, 0..) |row, dy| {
+        for (row, 0..) |v, dx| {
+            if (v == 0) continue;
+            const x = cx + @as(i32, @intCast(dx));
+            const y = cy + @as(i32, @intCast(dy));
+            if (x < 0 or y < 0 or x >= W or y >= H) continue;
+            const color: u32 = if (v == 1) 0xFFFFFFFF else 0xFF000000;
+            px[@intCast(y * pitch + x)] = color;
+        }
     }
 }
