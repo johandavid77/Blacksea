@@ -84,6 +84,41 @@ pub fn main() !void {
     var pointer_moved  = false;
     var last_render_ms: u64 = 0;
 
+    // Cargar wallpaper PPM
+    load_wp: {
+        const wp_fd_r = linux.open("/home/johan/blacksea/assets/wallpaper.ppm", .{ .ACCMODE = .RDONLY }, 0);
+        const wp_fd: i32 = @bitCast(@as(u32, @truncate(wp_fd_r)));
+        if (wp_fd < 0) { std.log.err("wp open failed: {}", .{wp_fd}); break :load_wp; }
+        defer _ = linux.close(@intCast(wp_fd));
+        // Leer header línea a línea
+        var hdr: [128]u8 = undefined;
+        var hpos: usize = 0;
+        // Leer byte a byte hasta newline para P6
+        var b: [1]u8 = undefined;
+        hpos = 0;
+        while (hpos < 3) { _ = linux.read(@intCast(wp_fd), &b, 1); if (b[0] == '\n') break; hdr[hpos] = b[0]; hpos += 1; }
+        if (!std.mem.eql(u8, hdr[0..2], "P6")) { std.log.err("wp not P6", .{}); break :load_wp; }
+        // Leer WxH
+        hpos = 0;
+        while (hpos < 63) { _ = linux.read(@intCast(wp_fd), &b, 1); if (b[0] == '\n') break; hdr[hpos] = b[0]; hpos += 1; }
+        var it = std.mem.tokenizeScalar(u8, hdr[0..hpos], ' ');
+        wallpaper_w = std.fmt.parseInt(u32, it.next() orelse break :load_wp, 10) catch break :load_wp;
+        wallpaper_h = std.fmt.parseInt(u32, it.next() orelse break :load_wp, 10) catch break :load_wp;
+        // Leer maxval line
+        while (true) { const nr = linux.read(@intCast(wp_fd), &b, 1); if (nr <= 0 or b[0] == '\n') break; }
+        // Leer pixels
+        var rgb: [3]u8 = undefined;
+        const total = wallpaper_w * wallpaper_h;
+        var pi: u32 = 0;
+        while (pi < total) : (pi += 1) {
+            var got: usize = 0;
+            while (got < 3) { const nr = linux.read(@intCast(wp_fd), rgb[got..].ptr, 3-got); if (nr <= 0) break :load_wp; got += @intCast(nr); }
+            wp_buf[pi] = 0xFF000000|(@as(u32,rgb[0])<<16)|(@as(u32,rgb[1])<<8)|rgb[2];
+        }
+        wallpaper_data = wp_buf[0..total];
+        std.log.info("wallpaper: {}x{}", .{wallpaper_w, wallpaper_h});
+    }
+
     while (running) {
         // ── Input ────────────────────────────────────────────────────────
         for (input.devices[0..input.count]) |*dev| {
