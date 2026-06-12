@@ -384,12 +384,16 @@ fn drawFrame(output: *drm.Output, mode: LayoutMode, cx: u32, cy: u32) void {
     var ts_now: std.os.linux.timespec = undefined;
     _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.REALTIME, &ts_now);
     const secs = @as(u64, @intCast(ts_now.sec));
-    const hh: u64 = (secs % 86400) / 3600;
-    const mm: u64 = (secs % 3600) / 60;
-    const ss: u64 = secs % 60;
+    const local_secs = secs -% (5 * 3600); // UTC-5 Colombia
+    const hh: u64 = (local_secs % 86400) / 3600;
+    const mm: u64 = (local_secs % 3600) / 60;
+    const ss: u64 = local_secs % 60;
     var tbuf: [16]u8 = undefined;
     const tstr = std.fmt.bufPrint(&tbuf, "{d:0>2}:{d:0>2}:{d:0>2}", .{hh, mm, ss}) catch "??:??:??";
     fb.drawText(output.width / 2 -| 24, 12, tstr, Colors.white, Colors.surface);
+    // Título ventana enfocada (izquierda)
+    if (focused_title_len > 0)
+        fb.drawText(40, 12, focused_title[0..focused_title_len], Colors.white, Colors.surface);
     const mc: u32 = if (mode == .scrolling) Colors.accent else 0xFF3FB950;
     fb.fillRect(8, 8, 16, 16, mc);
     if (cy > 32) {
@@ -401,6 +405,8 @@ fn drawFrame(output: *drm.Output, mode: LayoutMode, cx: u32, cy: u32) void {
 var back_pixels: [1280 * 800]u32 = std.mem.zeroes([1280 * 800]u32);
 var g_start_ms: u64 = 0;
 var wallpaper_data: ?[]u32 = null;
+var focused_title: [64]u8 = [_]u8{0} ** 64;
+var focused_title_len: usize = 0;
 var wallpaper_w: u32 = 0;
 var wallpaper_h: u32 = 0;
 var wp_buf: [1280*800]u32 = undefined;
