@@ -90,7 +90,7 @@ pub fn main() !void {
     cfg.load("/home/johan/.config/blacksea/init.lua") catch {};
 
     load_wp: {
-        const wp_fd_r = linux.open(&cfg.wallpaper_path, .{ .ACCMODE = .RDONLY }, 0);
+        const wp_fd_r = linux.open(@as([*:0]const u8, @ptrCast(std.mem.sliceTo(&cfg.wallpaper_path, 0).ptr)), .{ .ACCMODE = .RDONLY }, 0);
         const wp_fd: i32 = @bitCast(@as(u32, @truncate(wp_fd_r)));
         if (wp_fd < 0) { std.log.err("wp open failed: {}", .{wp_fd}); break :load_wp; }
         defer _ = linux.close(@intCast(wp_fd));
@@ -164,7 +164,7 @@ pub fn main() !void {
                                                     // Enter al nuevo
                                                     if (cl2.keyboard_id > 0) {
                                                         srv.serial += 1;
-                                                        seat_mod.sendKeyboardEnter(cl2.fd, cl2.keyboard_id, s.id, srv.serial);
+                                                        if (s.id > 0) seat_mod.sendKeyboardEnter(cl2.fd, cl2.keyboard_id, s.id, srv.serial);
                                                         seat_mod.sendModifiers(cl2.fd, cl2.keyboard_id, srv.serial, 0, 0, 0, 0);
                                                     }
                                                     std.log.info("focus -> fd={}", .{cl2.fd});

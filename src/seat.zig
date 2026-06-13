@@ -144,7 +144,7 @@ pub fn sendKeyboardEnter(fd: i32, keyboard_id: u32, surface_id: u32, serial: u32
     writeU32(&p, 4, surface_id);
     writeU32(&p, 8, 0); // array vacío de teclas presionadas
     sendEvent(fd, keyboard_id, WL_KEYBOARD_ENTER, &p);
-    std.log.info("wl_keyboard enter surface={}", .{surface_id});
+    std.log.info("wl_keyboard enter fd={} surface={}", .{fd, surface_id});
 }
 
 /// Enviar wl_keyboard.key

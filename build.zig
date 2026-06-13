@@ -16,6 +16,8 @@ pub fn build(b: *std.Build) void {
 
     // Lua 5.5 para configuración
     exe.root_module.linkSystemLibrary("lua++", .{});
+    exe.root_module.linkSystemLibrary("lua", .{});
+    exe.root_module.addCSourceFile(.{ .file = b.path("src/lua_wrap.c"), .flags = &[_][]const u8{ "-I/usr/include" } });
     b.installArtifact(exe);
 
     const run_cmd  = b.addRunArtifact(exe);

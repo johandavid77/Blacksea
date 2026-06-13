@@ -11,7 +11,7 @@
 const std = @import("std");
 const linux = std.os.linux;
 
-pub const MAX_SURFACES = 16;
+pub const MAX_SURFACES = 64;
 pub const MAX_BUFFERS  = 32;
 
 // ─── Formato de píxel ─────────────────────────────────────────────────────────
