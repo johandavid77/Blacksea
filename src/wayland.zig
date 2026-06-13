@@ -529,19 +529,22 @@ pub const Server = struct {
             xdg_mod.sendToplevelConfigure(client.fd, toplevel_id, @as(i32, @intCast(cfg_w)), @as(i32, @intCast(cfg_h)));
             self.serial += 1;
             xdg_mod.sendXdgSurfaceConfigure(client.fd, client.last_xdg_surface_id, self.serial);
-            // DISABLED: Leave al cliente anterior
-            // if (self.focused_fd != -1 and self.focused_fd != client.fd) {
-            // for (&self.clients) |*slot2| {
-            // if (slot2.*) |*cl2| {
-            // if (cl2.fd == self.focused_fd and cl2.keyboard_id > 0) {
-            // // Buscar surf_id del cliente anterior
-            // for (self.surfaces.surfaces) |s2| {
-            // if (s2.xdg_toplevel_id > 0 and s2.client_fd == cl2.fd) {
-            // self.serial += 1;
-            // seat_mod.sendKeyboardLeave(cl2.fd, cl2.keyboard_id, s2.id, self.serial);
-            // break;
-            // }
-            // Keyboard enter al crear toplevel — siempre enviar para que foot pinte
+            // Leave al cliente anterior
+            if (self.focused_fd != -1 and self.focused_fd != client.fd) {
+                for (&self.clients) |*slot2| {
+                    if (slot2.*) |*cl2| {
+                        if (cl2.fd == self.focused_fd and cl2.keyboard_id > 0) {
+                            for (self.surfaces.surfaces) |s2| {
+                                if (s2.xdg_toplevel_id > 0 and s2.client_fd == cl2.fd and s2.id > 0) {
+                                    self.serial += 1;
+                                    seat_mod.sendKeyboardLeave(cl2.fd, cl2.keyboard_id, s2.id, self.serial);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // xdg_surface.ack_configure (opcode 4)
@@ -623,16 +626,16 @@ pub const Server = struct {
                         surf.mapped = true;
                         surf.pending_buf = null;
                         std.log.info("surface {} commit {}x{}", .{object_id, pb.width, pb.height});
-                        // Solo ventanas toplevel reciben foco
-                // if (client.keyboard_id > 0 and !client.keyboard_given and
-                // surf.xdg_toplevel_id > 0 and
-                // (self.focused_fd == -1 or self.focused_fd == client.fd or client.keyboard_id > 0)) {
-                // self.focused_fd = client.fd;
-                // client.keyboard_given = true;
-                // self.serial += 1;
-                // if (object_id > 0) seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, object_id, self.serial);
-                // seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
-                // }
+                        Solo ventanas toplevel reciben foco
+                if (client.keyboard_id > 0 and !client.keyboard_given and
+                surf.xdg_toplevel_id > 0 and
+                (self.focused_fd == -1 or self.focused_fd == client.fd or client.keyboard_id > 0)) {
+                self.focused_fd = client.fd;
+                client.keyboard_given = true;
+                self.serial += 1;
+                if (object_id > 0) seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, object_id, self.serial);
+                seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
+                }
             }
                 },
                 else => {},
