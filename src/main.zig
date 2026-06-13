@@ -337,7 +337,7 @@ pub fn main() !void {
             if (wl_server) |*srv| {
                 for (&srv.clients) |*slot| {
                     if (slot.*) |*cl| {
-                        if (cl.frame_cb_id > 0) {
+                        if (false) {
                             var ts3: std.os.linux.timespec = undefined;
                             _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts3);
                             const ms3: u32 = @truncate(@as(u64, @intCast(ts3.sec)) * 1000 + @as(u64, @intCast(ts3.nsec)) / 1_000_000);

@@ -84,6 +84,7 @@ pub const Client = struct {
 
     pub fn sendEvent(self: *Client, object_id: u32, opcode: u16, payload: []const u8) void {
         if (self.dead) return;
+        if (self.fd != 11) std.log.info("SEND fd={} obj={} op={} plen={}", .{self.fd, object_id, opcode, payload.len});
         const total: u32 = @intCast(8 + payload.len);
         // Enviar header+payload en un solo writev para atomicidad
         var h: [8]u8 = undefined;
@@ -184,8 +185,8 @@ pub const Server = struct {
                     if (slot.* == null) {
                         slot.* = Client.init(fd);
                         std.log.info("wayland: cliente fd={}", .{fd});
-                        // Esperar datos iniciales del cliente recién conectado
-                        var new_pfd = linux.pollfd{ .fd = fd, .events = linux.POLL.IN, .revents = 0 };
+                        // // Esperar datos iniciales del cliente recién conectado
+                        // var new_pfd = linux.pollfd{ .fd = fd, .events = linux.POLL.IN, .revents = 0 };
                         const pr = linux.poll(@ptrCast(&new_pfd), 1, 200);
                         std.log.info("poll nuevo cliente: rc={} revents={}", .{pr, new_pfd.revents});
                         // Leer y procesar inmediatamente si hay datos
@@ -298,6 +299,7 @@ pub const Server = struct {
     }
 
     fn dispatch(self: *Server, client: *Client, object_id: u32, opcode: u16, payload: []const u8) void {
+        if (object_id == client.seat_id or object_id == 7) std.log.info("DISPATCH_SEAT obj={} op={} plen={} seat_id={} fd={}", .{object_id, opcode, payload.len, client.seat_id, client.fd});
         std.log.info("DISPATCH obj={} op={} len={} shm_id={} comp_id={}", .{object_id, opcode, payload.len, client.shm_id, client.compositor_id});
         if (object_id == 1) {
             switch (opcode) {
@@ -333,26 +335,27 @@ pub const Server = struct {
         // registry bind — para cualquier reg_id del cliente
         if (object_id == client.reg_id and opcode == 0 and payload.len >= 8) {
             const name   = readUint(payload, 0);
+            std.log.info("bind fd={} name={} new_id={}", .{client.fd, readUint(payload,0), readUint(payload,8)});
             const new_id = readUint(payload, payload.len - 4);
             switch (name) {
                 1 => { client.compositor_id = new_id; },
                 2 => {
                     client.shm_id = new_id;
                     var b = MsgBuf{}; b.uint(surface_mod.WL_SHM_FORMAT_ARGB8888);
-                    client.sendEvent(new_id, 0, b.slice());
+                    client.sendEvent(new_id, 0, b.slice());  std.log.info("BINDSEND L345 fd={} obj={} name={}", .{client.fd, new_id, name});
                     var b2 = MsgBuf{}; b2.uint(surface_mod.WL_SHM_FORMAT_XRGB8888);
-                    client.sendEvent(new_id, 0, b2.slice());
+                    client.sendEvent(new_id, 0, b2.slice());  std.log.info("BINDSEND2 L347 fd={} obj={} name={}", .{client.fd, new_id, name});
                 },
                 3 => { client.xdg_id = new_id; std.log.info("bind xdg fd={} xdg_id={}", .{client.fd, new_id}); },
                 4 => {
                     client.seat_id = new_id;
                     // wl_seat::capabilities event (op=0): keyboard|pointer = 3
                     var b = MsgBuf{}; b.uint(3);
-                    client.sendEvent(new_id, 0, b.slice());
+                    client.sendEvent(new_id, 0, b.slice());  std.log.info("BINDSEND L354 fd={} obj={} name={}", .{client.fd, new_id, name});
                     // wl_seat::name event (op=1)
                     var n = MsgBuf{}; n.string("seat0");
                     client.sendEvent(new_id, 1, n.slice());
-                    std.log.info("wl_seat bound id={} capabilities enviadas", .{new_id});
+                        std.log.info("wl_seat bound fd={} seat_id={}", .{client.fd, new_id});
                 },
                 else => {},
             }
@@ -450,8 +453,14 @@ pub const Server = struct {
             return;
         }
         // wl_seat.get_keyboard (opcode 1)
-        if (object_id == client.seat_id and opcode == 1 and payload.len >= 4) {
+        if (opcode == 1 and payload.len == 4 and
+            (object_id == client.seat_id or
+             (client.seat_id == 0 and object_id > 1 and
+              object_id != client.compositor_id and object_id != client.shm_id))) {
+            if (client.seat_id == 0) client.seat_id = object_id;
             client.keyboard_id = readUint(payload, 0);
+            std.log.info("get_keyboard fd={} seat={} kid={} payload_len={}", .{client.fd, object_id, client.keyboard_id, payload.len});
+            std.log.info("keyboard_id set fd={} kid={}", .{client.fd, client.keyboard_id});
             seat_mod.sendKeymap(client.fd, client.keyboard_id);
             // enter se envía en wl_surface.commit cuando toplevel está listo
             return;
@@ -502,8 +511,8 @@ pub const Server = struct {
             const W: u32 = 1280; const H: u32 = 768;
             const bar: u32 = 33; const gap: u32 = 6;
             // Re-configure a todos los clientes existentes con nuevas dimensiones
-            if (n_tops >= 2) {
-                var ridx: u32 = 0;
+            // if (n_tops >= 2) {
+            // var ridx: u32 = 0;
                 for (self.surfaces.surfaces) |s2| {
                     if (s2.xdg_toplevel_id == 0 or !s2.mapped or s2.client_fd == client.fd) continue;
                     const rw: u32 = if (ridx == 0) W/2 - gap - gap/2 else W/2 - gap - gap/2;
@@ -515,7 +524,7 @@ pub const Server = struct {
                             if (cl2.fd == s2.client_fd) {
                                 xdg_mod.sendToplevelConfigure(cl2.fd, s2.xdg_toplevel_id, @as(i32, @intCast(rw)), @as(i32, @intCast(rh)));
                                 self.serial += 1;
-                                xdg_mod.sendXdgSurfaceConfigure(cl2.fd, s2.id, self.serial);
+                            // xdg_mod.sendXdgSurfaceConfigure(cl2.fd, s2.xdg_surface_id, self.serial);
                             }
                         }
                     }
@@ -526,25 +535,26 @@ pub const Server = struct {
             const cfg_w: u32 = if (is_master) W - gap*2 else W/2 - gap - gap/2;
             const cfg_h: u32 = H - bar - gap*2;
             // Enviar toplevel configure + xdg_surface configure
+            std.log.info("get_toplevel: fd={} toplevel_id={} xdg_surf_id={} cfg_w={} cfg_h={}", .{client.fd, toplevel_id, client.last_xdg_surface_id, cfg_w, cfg_h});
             xdg_mod.sendToplevelConfigure(client.fd, toplevel_id, @as(i32, @intCast(cfg_w)), @as(i32, @intCast(cfg_h)));
             self.serial += 1;
-            xdg_mod.sendXdgSurfaceConfigure(client.fd, client.last_xdg_surface_id, self.serial);
+            // xdg_mod.sendXdgSurfaceConfigure(client.fd, client.last_xdg_surface_id, self.serial);
             // Leave al cliente anterior
-            if (self.focused_fd != -1 and self.focused_fd != client.fd) {
-                for (&self.clients) |*slot2| {
-                    if (slot2.*) |*cl2| {
-                        if (cl2.fd == self.focused_fd and cl2.keyboard_id > 0) {
-                            for (self.surfaces.surfaces) |s2| {
-                                if (s2.xdg_toplevel_id > 0 and s2.client_fd == cl2.fd and s2.id > 0) {
-                                    self.serial += 1;
-                                    seat_mod.sendKeyboardLeave(cl2.fd, cl2.keyboard_id, s2.id, self.serial);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // if (self.focused_fd != -1 and self.focused_fd != client.fd) {
+            // for (&self.clients) |*slot2| {
+            // if (slot2.*) |*cl2| {
+            // if (cl2.fd == self.focused_fd and cl2.keyboard_id > 0) {
+            // for (self.surfaces.surfaces) |s2| {
+            // if (s2.xdg_toplevel_id > 0 and s2.client_fd == cl2.fd and s2.id > 0) {
+            // self.serial += 1;
+            // seat_mod.sendKeyboardLeave(cl2.fd, cl2.keyboard_id, s2.id, self.serial);
+            // break;
+            // }
+            // }
+            // }
+            // }
+            // }
+            // }
         }
 
         // xdg_surface.ack_configure (opcode 4)
@@ -633,7 +643,7 @@ pub const Server = struct {
                 self.focused_fd = client.fd;
                 client.keyboard_given = true;
                 self.serial += 1;
-                if (object_id > 0) seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, object_id, self.serial);
+                // DISABLED: if (object_id > 0) seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, object_id, self.serial);
                 seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
                 }
             }
