@@ -130,6 +130,7 @@ pub fn main() !void {
             while (std.posix.read(dev.fd, std.mem.asBytes(&ev))) |n| {
                 if (n < @sizeOf(evdev.InputEvent)) break;
                 if (ev.type == evdev.EV_KEY) {
+                    std.log.info("EVKEY code={} val={}", .{ev.code, ev.value});
                     // Mouse buttons
                     if (ev.code == evdev.BTN_LEFT or ev.code == evdev.BTN_RIGHT or ev.code == evdev.BTN_MIDDLE) {
                         if (wl_server) |*srv| {
@@ -138,6 +139,16 @@ pub fn main() !void {
                             const ms_b: u32 = @truncate(@as(u64,@intCast(ts_b.sec))*1000+@as(u64,@intCast(ts_b.nsec))/1_000_000);
                             // Focus-on-click
                             if (ev.value == 1 and ev.code == evdev.BTN_LEFT) {
+                                std.log.info("CLICK x={} y={}", .{cursor_x, cursor_y});
+                                for (srv.surfaces.surfaces) |sdbg| {
+                                    if (sdbg.id == 0 or !sdbg.mapped) continue;
+                                    std.log.info("  surf id={} fd={} x={} y={} w={} h={} top={}", .{sdbg.id, sdbg.client_fd, sdbg.x, sdbg.y, sdbg.width, sdbg.height, sdbg.xdg_toplevel_id});
+                                }
+                                std.log.info("CLICK x={} y={}", .{cursor_x, cursor_y});
+                                for (srv.surfaces.surfaces) |sdbg| {
+                                    if (sdbg.id == 0 or !sdbg.mapped) continue;
+                                    std.log.info("  surf id={} fd={} x={} y={} w={} h={} top={}", .{sdbg.id, sdbg.client_fd, sdbg.x, sdbg.y, sdbg.width, sdbg.height, sdbg.xdg_toplevel_id});
+                                }
                                 focus: for (&srv.clients) |*slot2| {
                                     if (slot2.*) |*cl2| {
                                         for (srv.surfaces.surfaces) |s| {
@@ -214,7 +225,8 @@ pub fn main() !void {
                                 _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
                                 const abs_ms: u64 = @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / 1_000_000;
                                 const now_ms: u32 = @truncate(abs_ms - g_start_ms);
-                                seat_mod.sendKey(cl.fd, cl.keyboard_id, srv.serial, now_ms, ev.code, key_state); // evdev+8 = XKB keycode
+                                std.log.info("KEY fd={} kid={} code={} state={}", .{cl.fd, cl.keyboard_id, ev.code, key_state});
+                    seat_mod.sendKey(cl.fd, cl.keyboard_id, srv.serial, now_ms, ev.code, key_state); // evdev+8 = XKB keycode
                                 dirty = true;
                                 break;
                             }
