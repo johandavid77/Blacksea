@@ -195,7 +195,7 @@ pub fn main() !void {
                                     var bp = wayland.MsgBuf{};
                                     bp.uint(srv.serial); bp.uint(ms_b);
                                     bp.uint(btn); bp.uint(@intCast(ev.value));
-                                    cl.sendEvent(cl.pointer_id, 3, bp.slice());
+                                    // TEMP: cl.sendEvent(cl.pointer_id, 3, bp.slice());
                                 }
                             }
                         }
@@ -219,6 +219,8 @@ pub fn main() !void {
                     const key_state: u32 = if (ev.value == evdev.KEY_PRESSED) 1 else 0;
                     for (&srv.clients) |*slot| {
                         if (slot.*) |*cl| {
+                            std.log.info("KEYCHECK fd={} kid={} focused={}", .{cl.fd, cl.keyboard_id, srv.focused_fd});
+                            std.log.info("KEYCHECK fd={} kid={} focused={}", .{cl.fd, cl.keyboard_id, srv.focused_fd});
                             if (cl.keyboard_id > 0 and cl.fd == srv.focused_fd) {
                                 srv.serial += 1;
                                 var ts: std.os.linux.timespec = undefined;
@@ -273,6 +275,12 @@ pub fn main() !void {
             drawFrame(output, mode, @intCast(cursor_x), @intCast(cursor_y));
             if (wl_server) |*s| {
                 blitSurfaces(output, &s.surfaces, mode);
+                for (&s.clients) |*slot_rb| {
+                    if (slot_rb.*) |*cl_rb| cl_rb.needs_blit = false;
+                }
+                for (&s.clients) |*slot_rb| {
+                    if (slot_rb.*) |*cl_rb| cl_rb.needs_blit = false;
+                }
                 // Bordes con esquinas redondeadas
                 const bw2: u32 = 2;
                 const bc2: u32 = 0xFF4A90D9;
@@ -326,7 +334,7 @@ pub fn main() !void {
                             var lv = wayland.MsgBuf{};
                             lv.uint(srv.serial); lv.uint(cl.pointer_surface_id);
                             cl.sendEvent(cl.pointer_id, 1, lv.slice()); // leave
-                            cl.sendEvent(cl.pointer_id, 5, &[_]u8{});
+                            // TEMP: cl.sendEvent(cl.pointer_id, 5, &[_]u8{});
                         }
                         cl.pointer_surface_id = sid;
                         if (sid > 0) {
@@ -336,8 +344,8 @@ pub fn main() !void {
                             var en = wayland.MsgBuf{};
                             en.uint(srv.serial); en.uint(sid);
                             en.fixed(rx); en.fixed(ry);
-                            cl.sendEvent(cl.pointer_id, 0, en.slice());
-                            cl.sendEvent(cl.pointer_id, 5, &[_]u8{});
+                            // DISABLED: cl.sendEvent(cl.pointer_id, 0, en.slice());
+                            // TEMP: cl.sendEvent(cl.pointer_id, 5, &[_]u8{});
                         }
                     }
                 }
@@ -349,7 +357,7 @@ pub fn main() !void {
             if (wl_server) |*srv| {
                 for (&srv.clients) |*slot| {
                     if (slot.*) |*cl| {
-                        if (false) {
+                        if (cl.frame_cb_id > 0) {
                             var ts3: std.os.linux.timespec = undefined;
                             _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts3);
                             const ms3: u32 = @truncate(@as(u64, @intCast(ts3.sec)) * 1000 + @as(u64, @intCast(ts3.nsec)) / 1_000_000);

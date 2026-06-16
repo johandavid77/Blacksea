@@ -83,6 +83,7 @@ pub const Client = struct {
     }
 
     pub fn sendEvent(self: *Client, object_id: u32, opcode: u16, payload: []const u8) void {
+        if (opcode == 0) std.log.info("SEND0 fd={} obj={} plen={}", .{self.fd, object_id, payload.len});
         if (self.dead) return;
         if (self.fd != 11) std.log.info("SEND fd={} obj={} op={} plen={}", .{self.fd, object_id, opcode, payload.len});
         const total: u32 = @intCast(8 + payload.len);
@@ -186,7 +187,7 @@ pub const Server = struct {
                         slot.* = Client.init(fd);
                         std.log.info("wayland: cliente fd={}", .{fd});
                         // // Esperar datos iniciales del cliente recién conectado
-                        // var new_pfd = linux.pollfd{ .fd = fd, .events = linux.POLL.IN, .revents = 0 };
+                        var new_pfd = linux.pollfd{ .fd = fd, .events = linux.POLL.IN, .revents = 0 };
                         const pr = linux.poll(@ptrCast(&new_pfd), 1, 200);
                         std.log.info("poll nuevo cliente: rc={} revents={}", .{pr, new_pfd.revents});
                         // Leer y procesar inmediatamente si hay datos
@@ -511,8 +512,8 @@ pub const Server = struct {
             const W: u32 = 1280; const H: u32 = 768;
             const bar: u32 = 33; const gap: u32 = 6;
             // Re-configure a todos los clientes existentes con nuevas dimensiones
-            // if (n_tops >= 2) {
-            // var ridx: u32 = 0;
+            if (n_tops >= 2) {
+            var ridx: u32 = 0;
                 for (self.surfaces.surfaces) |s2| {
                     if (s2.xdg_toplevel_id == 0 or !s2.mapped or s2.client_fd == client.fd) continue;
                     const rw: u32 = if (ridx == 0) W/2 - gap - gap/2 else W/2 - gap - gap/2;
@@ -538,7 +539,7 @@ pub const Server = struct {
             std.log.info("get_toplevel: fd={} toplevel_id={} xdg_surf_id={} cfg_w={} cfg_h={}", .{client.fd, toplevel_id, client.last_xdg_surface_id, cfg_w, cfg_h});
             xdg_mod.sendToplevelConfigure(client.fd, toplevel_id, @as(i32, @intCast(cfg_w)), @as(i32, @intCast(cfg_h)));
             self.serial += 1;
-            // xdg_mod.sendXdgSurfaceConfigure(client.fd, client.last_xdg_surface_id, self.serial);
+            xdg_mod.sendXdgSurfaceConfigure(client.fd, client.last_xdg_surface_id, self.serial);
             // Leave al cliente anterior
             // if (self.focused_fd != -1 and self.focused_fd != client.fd) {
             // for (&self.clients) |*slot2| {
@@ -636,14 +637,17 @@ pub const Server = struct {
                         surf.mapped = true;
                         surf.pending_buf = null;
                         std.log.info("surface {} commit {}x{}", .{object_id, pb.width, pb.height});
-                        Solo ventanas toplevel reciben foco
+                        // Solo ventanas toplevel reciben foco
                 if (client.keyboard_id > 0 and !client.keyboard_given and
                 surf.xdg_toplevel_id > 0 and
                 (self.focused_fd == -1 or self.focused_fd == client.fd or client.keyboard_id > 0)) {
                 self.focused_fd = client.fd;
                 client.keyboard_given = true;
                 self.serial += 1;
-                // DISABLED: if (object_id > 0) seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, object_id, self.serial);
+                if (client.keyboard_id > 0 and client.last_wl_surface_id > 0) {
+                    self.serial += 1;
+                    seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, client.last_wl_surface_id, self.serial);
+                }
                 seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
                 }
             }

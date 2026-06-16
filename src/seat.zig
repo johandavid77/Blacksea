@@ -52,86 +52,58 @@ pub fn sendSeatCapabilities(fd: i32, seat_id: u32) void {
 /// Enviar wl_keyboard keymap (XKB_KEYMAP_FORMAT_XKB_V1 = 1)
 /// Usamos el keymap mínimo del sistema
 pub fn sendKeymap(fd: i32, keyboard_id: u32) void {
-    // Abrir el keymap del sistema
-    const keymap_path = "/usr/share/X11/xkb/keymaps/xkbcomp";
-    _ = keymap_path;
+    std.log.info("sendKeymap called fd={} kid={}", .{fd, keyboard_id});
+    const path = "/tmp/keymap.xkb";
+    const file_fd = linux.open(path, .{ .ACCMODE = .RDONLY }, 0);
+    const ffd: i32 = @bitCast(@as(u32, @truncate(file_fd)));
+    if (ffd < 0) { std.log.err("keymap file not found", .{}); return; }
+    const file_size = linux.lseek(@intCast(ffd), 0, linux.SEEK.END);
+    _ = linux.lseek(@intCast(ffd), 0, linux.SEEK.SET);
+    const keymap_size: u32 = @intCast(file_size);
 
-    // Keymap XKB mínimo funcional
-    const keymap_str =
-        "xkb_keymap {\n" ++
-        "  xkb_keycodes { include \"evdev+aliases(qwerty)\" };\n" ++
-        "  xkb_types { include \"complete\" };\n" ++
-        "  xkb_compat { include \"complete\" };\n" ++
-        "  xkb_symbols { include \"pc+us+inet(evdev)\" };\n" ++
-        "  xkb_geometry { include \"pc(pc105)\" };\n" ++
-        "};\n";
-
-    // Crear memfd con el keymap
-    const mfd = linux.memfd_create("wl_keymap", 0);
-    const mfd_i: i32 = @bitCast(@as(u32, @truncate(mfd)));
-    if (mfd_i < 0) {
-        std.log.err("memfd_create falló", .{});
-        return;
-    }
-
-    _ = linux.write(@intCast(mfd_i), keymap_str.ptr, keymap_str.len);
-
-    // Enviar keymap via SCM_RIGHTS
-    const keymap_size: u32 = @intCast(keymap_str.len + 1);
     var payload: [8]u8 = undefined;
-    writeU32(&payload, 0, 1); // format = XKB_V1
+    writeU32(&payload, 0, 1);
     writeU32(&payload, 4, keymap_size);
 
-    // Necesitamos enviar el fd via SCM_RIGHTS junto con el mensaje
-    var cmsg_buf: [256]u8 align(8) = std.mem.zeroes([256]u8);
-    const cmsg_len = @sizeOf(linux.cmsghdr) + @sizeOf(i32);
-    const cmsg: *linux.cmsghdr = @ptrCast(@alignCast(&cmsg_buf));
-    cmsg.len   = cmsg_len;
-    cmsg.level = linux.SOL.SOCKET;
-    cmsg.type  = 1; // SCM_RIGHTS
-    const fdptr: *i32 = @ptrCast(@alignCast(&cmsg_buf[@sizeOf(linux.cmsghdr)]));
-    fdptr.* = mfd_i;
-
-    // Header del mensaje Wayland
     const total: u32 = 8 + 8;
     var hdr: [8]u8 = undefined;
     writeU32(&hdr, 0, keyboard_id);
     writeU32(&hdr, 4, (total << 16) | WL_KEYBOARD_KEYMAP);
 
-    // Combinar header + payload
     var msg_data: [16]u8 = undefined;
     @memcpy(msg_data[0..8], &hdr);
     @memcpy(msg_data[8..16], &payload);
 
-    var iov = std.posix.iovec{
-        .base = &msg_data,
-        .len  = msg_data.len,
-    };
+    var iov = std.posix.iovec{ .base = &msg_data, .len = msg_data.len };
+    var cmsg_buf: [24]u8 align(8) = std.mem.zeroes([24]u8);
+    const cmsg: *linux.cmsghdr = @ptrCast(@alignCast(&cmsg_buf));
+    cmsg.len   = @sizeOf(linux.cmsghdr) + @sizeOf(i32);
+    cmsg.level = linux.SOL.SOCKET;
+    cmsg.type  = 1;
+    const fdptr: *i32 = @ptrCast(@alignCast(&cmsg_buf[@sizeOf(linux.cmsghdr)]));
+    fdptr.* = ffd;
+
     var msghdr = linux.msghdr{
-        .name       = null,
-        .namelen    = 0,
-        .iov        = @ptrCast(&iov),
-        .iovlen     = 1,
-        .control    = &cmsg_buf,
-        .controllen = cmsg_len,
-        .flags      = 0,
+        .name = null, .namelen = 0,
+        .iov = @ptrCast(&iov), .iovlen = 1,
+        .control = &cmsg_buf, .controllen = 24, .flags = 0,
     };
     _ = linux.sendmsg(@intCast(fd), @ptrCast(&msghdr), linux.MSG.NOSIGNAL);
-    _ = linux.close(@intCast(mfd_i));
-    std.log.info("wl_keyboard keymap enviado fd={}", .{keyboard_id});
-    // repeat_info: rate=25 delay=600
+    _ = linux.close(@intCast(ffd));
+    std.log.info("keymap enviado {} bytes", .{keymap_size});
+
     var ri: [8]u8 = undefined;
     std.mem.writeInt(u32, ri[0..4], 25, .little);
     std.mem.writeInt(u32, ri[4..8], 600, .little);
     sendEvent(fd, keyboard_id, 5, &ri);
 }
-
 /// Enviar wl_keyboard.enter (el cliente recibe el foco)
 /// Enviar wl_keyboard.leave (opcode 1)
 pub fn sendKeyboardLeave(fd: i32, keyboard_id: u32, surface_id: u32, serial: u32) void {
     var p: [8]u8 = undefined;
     writeU32(&p, 0, serial);
     writeU32(&p, 4, surface_id);
+    sendEvent(fd, keyboard_id, 1, &p); // wl_keyboard.leave opcode = 1
     std.log.info("wl_keyboard leave surface={}", .{surface_id});
 }
 
