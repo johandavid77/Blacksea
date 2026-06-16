@@ -195,7 +195,7 @@ pub fn main() !void {
                                     var bp = wayland.MsgBuf{};
                                     bp.uint(srv.serial); bp.uint(ms_b);
                                     bp.uint(btn); bp.uint(@intCast(ev.value));
-                                    // TEMP: cl.sendEvent(cl.pointer_id, 3, bp.slice());
+                                    cl.sendEvent(cl.pointer_id, 3, bp.slice());
                                 }
                             }
                         }
@@ -219,7 +219,6 @@ pub fn main() !void {
                     const key_state: u32 = if (ev.value == evdev.KEY_PRESSED) 1 else 0;
                     for (&srv.clients) |*slot| {
                         if (slot.*) |*cl| {
-                            std.log.info("KEYCHECK fd={} kid={} focused={}", .{cl.fd, cl.keyboard_id, srv.focused_fd});
                             std.log.info("KEYCHECK fd={} kid={} focused={}", .{cl.fd, cl.keyboard_id, srv.focused_fd});
                             if (cl.keyboard_id > 0 and cl.fd == srv.focused_fd) {
                                 srv.serial += 1;
@@ -334,7 +333,7 @@ pub fn main() !void {
                             var lv = wayland.MsgBuf{};
                             lv.uint(srv.serial); lv.uint(cl.pointer_surface_id);
                             cl.sendEvent(cl.pointer_id, 1, lv.slice()); // leave
-                            // TEMP: cl.sendEvent(cl.pointer_id, 5, &[_]u8{});
+                            cl.sendEvent(cl.pointer_id, 5, &[_]u8{});
                         }
                         cl.pointer_surface_id = sid;
                         if (sid > 0) {
@@ -344,8 +343,8 @@ pub fn main() !void {
                             var en = wayland.MsgBuf{};
                             en.uint(srv.serial); en.uint(sid);
                             en.fixed(rx); en.fixed(ry);
-                            // DISABLED: cl.sendEvent(cl.pointer_id, 0, en.slice());
-                            // TEMP: cl.sendEvent(cl.pointer_id, 5, &[_]u8{});
+                            cl.sendEvent(cl.pointer_id, 0, en.slice());
+                            cl.sendEvent(cl.pointer_id, 5, &[_]u8{});
                         }
                     }
                 }
