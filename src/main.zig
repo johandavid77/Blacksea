@@ -171,11 +171,29 @@ pub fn main() !void {
                                                             }
                                                         }
                                                     }
+                                                    // Leave al cliente anterior
+                                                    if (srv.focused_fd != -1 and srv.focused_fd != cl2.fd) {
+                                                        for (&srv.clients) |*old_slot| {
+                                                            if (old_slot.*) |*old_cl| {
+                                                                if (old_cl.fd == srv.focused_fd and old_cl.keyboard_id > 0) {
+                                                                    srv.serial += 1;
+                                                                    seat_mod.sendKeyboardLeave(old_cl.fd, old_cl.keyboard_id, old_cl.last_wl_surface_id, srv.serial);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                     srv.focused_fd = cl2.fd;
                                                     // Enter al nuevo
                                                     if (cl2.keyboard_id > 0) {
                                                         srv.serial += 1;
-                                                        if (s.id > 0) seat_mod.sendKeyboardEnter(cl2.fd, cl2.keyboard_id, s.id, srv.serial);
+                                                        // Buscar la surface principal (con xdg_toplevel) del cliente
+                    var enter_surf: u32 = cl2.last_wl_surface_id;
+                    for (srv.surfaces.surfaces) |ts| {
+                        if (ts.id > 0 and ts.client_fd == cl2.fd and ts.xdg_toplevel_id > 0) {
+                            enter_surf = ts.id; break;
+                        }
+                    }
+                    if (enter_surf > 0) seat_mod.sendKeyboardEnter(cl2.fd, cl2.keyboard_id, enter_surf, srv.serial);
                                                         seat_mod.sendModifiers(cl2.fd, cl2.keyboard_id, srv.serial, 0, 0, 0, 0);
                                                     }
                                                     std.log.info("focus -> fd={}", .{cl2.fd});
@@ -212,14 +230,46 @@ pub fn main() !void {
                     }
                     if (p) {
                         if (input.mods.ctrl and ev.code == evdev.KEY_Q)     { running = false; break; }
+                        // Alt+Tab: rotar foco entre clientes
+                        if (p and ev.code == 67) { // F9 focus cycle
+                            if (wl_server) |*srv2| {
+                                var found = false;
+                                var first_fd: i32 = -1;
+                                for (&srv2.clients) |*slot2| {
+                                    if (slot2.*) |*cl2| {
+                                        if (cl2.keyboard_id > 0) {
+                                            if (first_fd == -1) first_fd = cl2.fd;
+                                            if (found) {
+                                                srv2.focused_fd = cl2.fd;
+                                                dirty = true;
+                                                std.log.info("Alt+Tab focus -> fd={}", .{cl2.fd});
+                                                break;
+                                            }
+                                            if (cl2.fd == srv2.focused_fd) found = true;
+                                        }
+                                    }
+                                } else {
+                                    if (found and first_fd != -1) srv2.focused_fd = first_fd;
+                                }
+                            }
+                        }
                         if (ev.code == evdev.KEY_F1) { mode = mode.toggle(); dirty = true; }
                     }
                 // Reenviar tecla al cliente Wayland activo
                 if (wl_server) |*srv| {
                     const key_state: u32 = if (ev.value == evdev.KEY_PRESSED) 1 else 0;
+                    // Si el cliente enfocado murió, reasignar foco al primero disponible
+                    var focus_valid = false;
+                    for (&srv.clients) |*slot| {
+                        if (slot.*) |*cl| { if (cl.fd == srv.focused_fd and cl.keyboard_id > 0) { focus_valid = true; break; } }
+                    }
+                    if (!focus_valid) {
+                        for (&srv.clients) |*slot| {
+                            if (slot.*) |*cl| { if (cl.keyboard_id > 0) { srv.focused_fd = cl.fd; break; } }
+                        }
+                    }
                     for (&srv.clients) |*slot| {
                         if (slot.*) |*cl| {
-                            std.log.info("KEYCHECK fd={} kid={} focused={}", .{cl.fd, cl.keyboard_id, srv.focused_fd});
                             if (cl.keyboard_id > 0 and cl.fd == srv.focused_fd) {
                                 srv.serial += 1;
                                 var ts: std.os.linux.timespec = undefined;
@@ -342,7 +392,7 @@ pub fn main() !void {
                             srv.serial += 1;
                             var en = wayland.MsgBuf{};
                             en.uint(srv.serial); en.uint(sid);
-                            en.fixed(rx); en.fixed(ry);
+                            en.uint(@bitCast(rx << 8)); en.uint(@bitCast(ry << 8));
                             cl.sendEvent(cl.pointer_id, 0, en.slice());
                             cl.sendEvent(cl.pointer_id, 5, &[_]u8{});
                         }

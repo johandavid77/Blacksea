@@ -448,9 +448,13 @@ pub const Server = struct {
             return;
         }
         // wl_seat.get_pointer (opcode 0)
-        if (object_id == client.seat_id and opcode == 0 and payload.len >= 4) {
+        if (opcode == 0 and payload.len == 4 and
+            (object_id == client.seat_id or
+             (client.seat_id == 0 and object_id > 1 and
+              object_id != client.compositor_id and object_id != client.shm_id))) {
+            if (client.seat_id == 0) client.seat_id = object_id;
             client.pointer_id = readUint(payload, 0);
-            std.log.info("wl_pointer id={}", .{client.pointer_id});
+            std.log.info("get_pointer fd={} seat={} pid={}", .{client.fd, object_id, client.pointer_id});
             return;
         }
         // wl_seat.get_keyboard (opcode 1)
@@ -640,13 +644,13 @@ pub const Server = struct {
                         // Solo ventanas toplevel reciben foco
                 if (client.keyboard_id > 0 and !client.keyboard_given and
                 surf.xdg_toplevel_id > 0 and
-                (self.focused_fd == -1 or self.focused_fd == client.fd or client.keyboard_id > 0)) {
+                (self.focused_fd == -1 or self.focused_fd == client.fd)) {
                 self.focused_fd = client.fd;
                 client.keyboard_given = true;
                 self.serial += 1;
                 if (client.keyboard_id > 0 and client.last_wl_surface_id > 0) {
                     self.serial += 1;
-                    seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, client.last_wl_surface_id, self.serial);
+                    seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, surf.id, self.serial);
                 }
                 seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
                 }
