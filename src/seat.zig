@@ -103,7 +103,7 @@ pub fn sendKeyboardLeave(fd: i32, keyboard_id: u32, surface_id: u32, serial: u32
     var p: [8]u8 = undefined;
     writeU32(&p, 0, serial);
     writeU32(&p, 4, surface_id);
-    sendEvent(fd, keyboard_id, 1, &p); // wl_keyboard.leave opcode = 1
+    sendEvent(fd, keyboard_id, WL_KEYBOARD_LEAVE, &p);
     std.log.info("wl_keyboard leave surface={}", .{surface_id});
 }
 
