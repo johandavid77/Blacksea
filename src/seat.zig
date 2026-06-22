@@ -31,7 +31,7 @@ fn writeI32(buf: []u8, off: usize, v: i32) void {
     std.mem.writeInt(i32, buf[off..][0..4], v, .little);
 }
 
-fn sendEvent(fd: i32, obj: u32, op: u16, payload: []const u8) void {
+pub fn sendEvent(fd: i32, obj: u32, op: u16, payload: []const u8) void {
     const total: u32 = @intCast(8 + payload.len);
     var h: [8]u8 = undefined;
     writeU32(&h, 0, obj);
@@ -59,7 +59,7 @@ pub fn sendKeymap(fd: i32, keyboard_id: u32) void {
     if (ffd < 0) { std.log.err("keymap file not found", .{}); return; }
     const file_size = linux.lseek(@intCast(ffd), 0, linux.SEEK.END);
     _ = linux.lseek(@intCast(ffd), 0, linux.SEEK.SET);
-    const keymap_size: u32 = @intCast(file_size);
+    const keymap_size: u32 = @intCast(file_size + 1); // include null terminator
 
     var payload: [8]u8 = undefined;
     writeU32(&payload, 0, 1);

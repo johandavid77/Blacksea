@@ -56,12 +56,14 @@ pub const Client = struct {
     xdg_surface_ids: [8]u32 = std.mem.zeroes([8]u32),
     xdg_surface_count: usize = 0,
     last_wl_surface_id: u32 = 0,
+    configure_serial: u32 = 0,
+    pointer_surface_id: u32 = 0,
+    prev_buf_id: u32 = 0,
     last_xdg_surface_id: u32 = 0,
     reg_id: u32 = 2, // default wl_registry id
     keyboard_id : u32 = 0,
     pointer_id  : u32 = 0,
     frame_cb_id        : u32  = 0,
-    pointer_surface_id : u32  = 0,
     cursor_surface_id  : u32  = 0,
     cursor_hotspot_x   : i32  = 0,
     cursor_hotspot_y   : i32  = 0,
@@ -529,7 +531,8 @@ pub const Server = struct {
                             if (cl2.fd == s2.client_fd) {
                                 xdg_mod.sendToplevelConfigure(cl2.fd, s2.xdg_toplevel_id, @as(i32, @intCast(rw)), @as(i32, @intCast(rh)));
                                 self.serial += 1;
-                            // xdg_mod.sendXdgSurfaceConfigure(cl2.fd, s2.xdg_surface_id, self.serial);
+                            cl2.configure_serial += 1;
+                            xdg_mod.sendXdgSurfaceConfigure(cl2.fd, cl2.last_xdg_surface_id, cl2.configure_serial);
                             }
                         }
                     }
@@ -542,8 +545,8 @@ pub const Server = struct {
             // Enviar toplevel configure + xdg_surface configure
             std.log.info("get_toplevel: fd={} toplevel_id={} xdg_surf_id={} cfg_w={} cfg_h={}", .{client.fd, toplevel_id, client.last_xdg_surface_id, cfg_w, cfg_h});
             xdg_mod.sendToplevelConfigure(client.fd, toplevel_id, @as(i32, @intCast(cfg_w)), @as(i32, @intCast(cfg_h)));
-            self.serial += 1;
-            xdg_mod.sendXdgSurfaceConfigure(client.fd, client.last_xdg_surface_id, self.serial);
+            client.configure_serial += 1;
+            xdg_mod.sendXdgSurfaceConfigure(client.fd, client.last_xdg_surface_id, client.configure_serial);
             // Leave al cliente anterior
             // if (self.focused_fd != -1 and self.focused_fd != client.fd) {
             // for (&self.clients) |*slot2| {
@@ -619,6 +622,7 @@ pub const Server = struct {
                     if (payload.len >= 4) {
                         const cb_id = readUint(payload, 0);
                         client.frame_cb_id = cb_id;
+                        std.log.info("frame_cb set: fd={} cb_id={}", .{client.fd, cb_id});
                     }
                     return;
                 },
@@ -628,13 +632,17 @@ pub const Server = struct {
                         // Liberar buffer anterior si existe
                         if (surf.buffer) |old_buf| {
                             if (old_buf != pb) {
-                        // No enviar wl_buffer.release aqui — se envia post-blit
+                                client.sendEvent(old_buf.id, 0, &[_]u8{});
 
 
                             }
                         }
                         // Release del buffer anterior (ahora libre)
-                        if (surf.buffer) |ob| { if (ob.id != pb.id) client.sendEvent(ob.id, 0, &[_]u8{}); }
+                        if (surf.buffer) |ob| {
+                    if (ob.id != pb.id) {
+                        client.prev_buf_id = ob.id;
+                    }
+                }
                         surf.buffer = pb;
                         surf.width  = pb.width;
                         surf.height = pb.height;
@@ -643,9 +651,8 @@ pub const Server = struct {
                         std.log.info("surface {} commit {}x{}", .{object_id, pb.width, pb.height});
                         // Solo ventanas toplevel reciben foco
                 if (client.keyboard_id > 0 and !client.keyboard_given and
-                surf.xdg_toplevel_id > 0 and
-                (self.focused_fd == -1 or self.focused_fd == client.fd)) {
-                self.focused_fd = client.fd;
+                surf.xdg_toplevel_id > 0) {
+                if (self.focused_fd == -1) self.focused_fd = client.fd;
                 client.keyboard_given = true;
                 self.serial += 1;
                 if (client.keyboard_id > 0 and client.last_wl_surface_id > 0) {

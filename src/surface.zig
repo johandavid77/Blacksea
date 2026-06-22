@@ -136,13 +136,10 @@ pub const SurfaceManager = struct {
         }
         for (&self.buffers) |*b| {
             if (b.fd == -1 and b.id == 0) { // slot vacío
-                const size: usize = @intCast(stride * height);
-                const off: usize = @intCast(offset);
-            _ = off + size; // map_total no usado
-            // Guardar fd y offset — leeremos en blitSurface cuando foot haya pintado
-            const buf_mem = std.heap.page_allocator.alloc(u8, size) catch return null;
-            @memset(buf_mem, 0);
-            const ptr = buf_mem;
+        const size: usize = @intCast(stride * height);
+        const off: usize = @intCast(offset);
+        const ptr = std.heap.page_allocator.alloc(u8, size) catch return null;
+        @memset(ptr, 0);
                 b.* = Buffer{
                     .id     = id,
                     .fd     = fd,
@@ -184,11 +181,9 @@ pub const SurfaceManager = struct {
         if (surf.x >= @as(i32, @intCast(dst_w)) or surf.y >= @as(i32, @intCast(dst_h))) return;
         if (buf.data.len == 0) return;
         if (buf.width <= 0 or buf.height <= 0 or buf.stride <= 0) return;
-        // Leer datos frescos via pread
+        // Leer datos del SHM justo antes de blit
         if (buf.fd >= 0 and buf.data.len > 0) {
-            const nr = linux.pread(@intCast(buf.fd), buf.data.ptr, buf.data.len, @intCast(buf.offset));
-            const nri = @as(isize, @bitCast(nr));
-        if (surf.id == 3) std.log.info("pread surf3 fd={} off={} len={} nr={} b0={x}", .{buf.fd, buf.offset, buf.data.len, nri, buf.data[0]});
+            _ = linux.pread(@intCast(buf.fd), buf.data.ptr, buf.data.len, @intCast(buf.offset));
         }
         // Verificar que el fd del buffer sigue abierto
         if (buf.fd < 0) return;
@@ -197,6 +192,7 @@ pub const SurfaceManager = struct {
         const src_stride: u32 = @intCast(@divTrunc(buf.stride, 4));
         const npixels: usize = buf.data.len / 4;
         if (npixels == 0) return;
+        if (surf.id == 3) std.log.info("blit3 npx={} b0={x} data.len={}", .{npixels, buf.data[0], buf.data.len});
         const src = @as([*]const u32, @ptrCast(@alignCast(buf.data.ptr)))[0..npixels];
 
         const x0: u32 = if (surf.x >= 0) @intCast(surf.x) else 0;
