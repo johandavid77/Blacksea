@@ -628,6 +628,12 @@ pub const Server = struct {
                 },
                 6 => { // commit
                     client.needs_blit = true;
+                // Leer buffer SHM al momento del commit (estado final)
+                if (surf.pending_buf) |pb2| {
+                    if (pb2.fd >= 0 and pb2.data.len > 0) {
+                        _ = linux.pread(@intCast(pb2.fd), pb2.data.ptr, pb2.data.len, @intCast(pb2.offset));
+                    }
+                }
                     if (surf.pending_buf) |pb| {
                         // Liberar buffer anterior si existe
                         if (surf.buffer) |old_buf| {

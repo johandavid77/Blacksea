@@ -193,7 +193,15 @@ pub fn main() !void {
                             enter_surf = ts.id; break;
                         }
                     }
-                    if (enter_surf > 0) seat_mod.sendKeyboardEnter(cl2.fd, cl2.keyboard_id, enter_surf, srv.serial);
+                    // Fallback: usar cualquier surface toplevel del cliente
+                if (enter_surf == 0) {
+                    for (srv.surfaces.surfaces) |ts| {
+                        if (ts.id > 0 and ts.client_fd == cl2.fd) {
+                            enter_surf = ts.id; break;
+                        }
+                    }
+                }
+                if (enter_surf > 0) seat_mod.sendKeyboardEnter(cl2.fd, cl2.keyboard_id, enter_surf, srv.serial);
                                                         seat_mod.sendModifiers(cl2.fd, cl2.keyboard_id, srv.serial, 0, 0, 0, 0);
                                                     }
                                                     std.log.info("focus -> fd={}", .{cl2.fd});
@@ -231,28 +239,57 @@ pub fn main() !void {
                     if (p) {
                         if (input.mods.ctrl and ev.code == evdev.KEY_Q)     { running = false; break; }
                         // Alt+Tab: rotar foco entre clientes
-                        if (p and ev.code == 67) { // F9 focus cycle
-                            if (wl_server) |*srv2| {
-                                var found = false;
-                                var first_fd: i32 = -1;
-                                for (&srv2.clients) |*slot2| {
-                                    if (slot2.*) |*cl2| {
-                                        if (cl2.keyboard_id > 0) {
-                                            if (first_fd == -1) first_fd = cl2.fd;
-                                            if (found) {
-                                                srv2.focused_fd = cl2.fd;
-                                                dirty = true;
-                                                std.log.info("Alt+Tab focus -> fd={}", .{cl2.fd});
-                                                break;
-                                            }
-                                            if (cl2.fd == srv2.focused_fd) found = true;
-                                        }
-                                    }
-                                } else {
-                                    if (found and first_fd != -1) srv2.focused_fd = first_fd;
+                if (p and ev.code == 67) { // F9 focus cycle
+                    if (wl_server) |*srv2| {
+                        const old_fd = srv2.focused_fd;
+                        var found = false;
+                        var first_fd: i32 = -1;
+                        var new_fd: i32 = -1;
+                        for (&srv2.clients) |*slot2| {
+                            if (slot2.*) |*cl2| {
+                                if (cl2.keyboard_id > 0) {
+                                    if (first_fd == -1) first_fd = cl2.fd;
+                                    if (found) { new_fd = cl2.fd; break; }
+                                    if (cl2.fd == old_fd) found = true;
                                 }
                             }
                         }
+                        if (new_fd == -1 and found and first_fd != -1) new_fd = first_fd;
+                        if (new_fd != -1 and new_fd != old_fd) {
+                            // keyboard leave al anterior
+                            for (&srv2.clients) |*slot3| {
+                                if (slot3.*) |*cl3| {
+                                    if (cl3.fd == old_fd and cl3.keyboard_id > 0 and cl3.last_wl_surface_id > 0) {
+                                        srv2.serial += 1;
+                                        seat_mod.sendKeyboardLeave(cl3.fd, cl3.keyboard_id, cl3.last_wl_surface_id, srv2.serial);
+                                    }
+                                }
+                            }
+                            srv2.focused_fd = new_fd;
+                            // keyboard enter al nuevo
+                            for (&srv2.clients) |*slot4| {
+                                if (slot4.*) |*cl4| {
+                                    if (cl4.fd == new_fd and cl4.keyboard_id > 0) {
+                                        var esurf: u32 = cl4.last_wl_surface_id;
+                                        for (srv2.surfaces.surfaces) |ts| {
+                                            if (ts.id > 0 and ts.client_fd == cl4.fd and ts.xdg_toplevel_id > 0) {
+                                                esurf = ts.id; break;
+                                            }
+                                        }
+                                        if (esurf > 0) {
+                                            srv2.serial += 1;
+                                            seat_mod.sendKeyboardEnter(cl4.fd, cl4.keyboard_id, esurf, srv2.serial);
+                                            seat_mod.sendModifiers(cl4.fd, cl4.keyboard_id, srv2.serial, 0, 0, 0, 0);
+                                        }
+                                    }
+                                }
+                            }
+                            dirty = true;
+                            std.log.info("F9 focus -> fd={}", .{new_fd});
+                        }
+                    }
+                continue;
+                }
                         if (ev.code == evdev.KEY_F1) { mode = mode.toggle(); dirty = true; }
                     }
                 // Reenviar tecla al cliente Wayland activo
@@ -262,11 +299,6 @@ pub fn main() !void {
                     var focus_valid = false;
                     for (&srv.clients) |*slot| {
                         if (slot.*) |*cl| { if (cl.fd == srv.focused_fd and cl.keyboard_id > 0) { focus_valid = true; break; } }
-                    }
-                    if (!focus_valid) {
-                        for (&srv.clients) |*slot| {
-                            if (slot.*) |*cl| { if (cl.keyboard_id > 0) { srv.focused_fd = cl.fd; break; } }
-                        }
                     }
                     for (&srv.clients) |*slot| {
                         if (slot.*) |*cl| {

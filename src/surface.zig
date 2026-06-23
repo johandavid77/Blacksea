@@ -181,6 +181,7 @@ pub const SurfaceManager = struct {
         if (surf.x >= @as(i32, @intCast(dst_w)) or surf.y >= @as(i32, @intCast(dst_h))) return;
         if (buf.data.len == 0) return;
         if (buf.width <= 0 or buf.height <= 0 or buf.stride <= 0) return;
+
         // Leer datos del SHM justo antes de blit
         if (buf.fd >= 0 and buf.data.len > 0) {
             _ = linux.pread(@intCast(buf.fd), buf.data.ptr, buf.data.len, @intCast(buf.offset));
@@ -192,7 +193,7 @@ pub const SurfaceManager = struct {
         const src_stride: u32 = @intCast(@divTrunc(buf.stride, 4));
         const npixels: usize = buf.data.len / 4;
         if (npixels == 0) return;
-        if (surf.id == 3) std.log.info("blit3 npx={} b0={x} data.len={}", .{npixels, buf.data[0], buf.data.len});
+        if (surf.id == 3) std.log.info("blit3 b0={x} bmid={x}", .{buf.data[0], buf.data[buf.data.len/2]});
         const src = @as([*]const u32, @ptrCast(@alignCast(buf.data.ptr)))[0..npixels];
 
         const x0: u32 = if (surf.x >= 0) @intCast(surf.x) else 0;

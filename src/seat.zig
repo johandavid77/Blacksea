@@ -91,6 +91,11 @@ pub fn sendKeymap(fd: i32, keyboard_id: u32) void {
     _ = linux.sendmsg(@intCast(fd), @ptrCast(&msghdr), linux.MSG.NOSIGNAL);
     _ = linux.close(@intCast(ffd));
     std.log.info("keymap enviado {} bytes", .{keymap_size});
+    // wl_keyboard.repeat_info (opcode 5): rate=25, delay=600
+    var rep: [8]u8 = undefined;
+    std.mem.writeInt(u32, rep[0..4], 25, .little);
+    std.mem.writeInt(u32, rep[4..8], 600, .little);
+    sendEvent(fd, keyboard_id, 5, &rep);
 
     var ri: [8]u8 = undefined;
     std.mem.writeInt(u32, ri[0..4], 25, .little);
