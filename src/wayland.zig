@@ -58,6 +58,7 @@ pub const Client = struct {
     last_wl_surface_id: u32 = 0,
     configure_serial: u32 = 0,
     pointer_surface_id: u32 = 0,
+    has_keyboard_focus: bool = false,
     prev_buf_id: u32 = 0,
     last_xdg_surface_id: u32 = 0,
     reg_id: u32 = 2, // default wl_registry id
@@ -664,6 +665,7 @@ pub const Server = struct {
                 if (client.keyboard_id > 0 and client.last_wl_surface_id > 0) {
                     self.serial += 1;
                     seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, surf.id, self.serial);
+                    client.has_keyboard_focus = true;
                 }
                 seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
                 }

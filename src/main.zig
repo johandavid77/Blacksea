@@ -201,7 +201,7 @@ pub fn main() !void {
                         }
                     }
                 }
-                if (enter_surf > 0) seat_mod.sendKeyboardEnter(cl2.fd, cl2.keyboard_id, enter_surf, srv.serial);
+                if (enter_surf > 0) { seat_mod.sendKeyboardEnter(cl2.fd, cl2.keyboard_id, enter_surf, srv.serial); cl2.has_keyboard_focus = true; }
                                                         seat_mod.sendModifiers(cl2.fd, cl2.keyboard_id, srv.serial, 0, 0, 0, 0);
                                                     }
                                                     std.log.info("focus -> fd={}", .{cl2.fd});
@@ -259,9 +259,10 @@ pub fn main() !void {
                             // keyboard leave al anterior
                             for (&srv2.clients) |*slot3| {
                                 if (slot3.*) |*cl3| {
-                                    if (cl3.fd == old_fd and cl3.keyboard_id > 0 and cl3.last_wl_surface_id > 0) {
+                                    if (cl3.fd == old_fd and cl3.keyboard_id > 0 and cl3.last_wl_surface_id > 0 and cl3.has_keyboard_focus) {
                                         srv2.serial += 1;
                                         seat_mod.sendKeyboardLeave(cl3.fd, cl3.keyboard_id, cl3.last_wl_surface_id, srv2.serial);
+                                        cl3.has_keyboard_focus = false;
                                     }
                                 }
                             }
@@ -279,6 +280,7 @@ pub fn main() !void {
                                         if (esurf > 0) {
                                             srv2.serial += 1;
                                             seat_mod.sendKeyboardEnter(cl4.fd, cl4.keyboard_id, esurf, srv2.serial);
+                                            cl4.has_keyboard_focus = true;
                                             seat_mod.sendModifiers(cl4.fd, cl4.keyboard_id, srv2.serial, 0, 0, 0, 0);
                                         }
                                     }
