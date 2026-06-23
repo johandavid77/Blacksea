@@ -171,17 +171,6 @@ pub fn main() !void {
                                                             }
                                                         }
                                                     }
-                                                    // Leave al cliente anterior
-                                                    if (srv.focused_fd != -1 and srv.focused_fd != cl2.fd) {
-                                                        for (&srv.clients) |*old_slot| {
-                                                            if (old_slot.*) |*old_cl| {
-                                                                if (old_cl.fd == srv.focused_fd and old_cl.keyboard_id > 0) {
-                                                                    srv.serial += 1;
-                                                                    seat_mod.sendKeyboardLeave(old_cl.fd, old_cl.keyboard_id, old_cl.last_wl_surface_id, srv.serial);
-                                                                }
-                                                            }
-                                                        }
-                                                    }
                                                     srv.focused_fd = cl2.fd;
                                                     // Enter al nuevo
                                                     if (cl2.keyboard_id > 0) {
@@ -239,7 +228,23 @@ pub fn main() !void {
                     if (p) {
                         if (input.mods.ctrl and ev.code == evdev.KEY_Q)     { running = false; break; }
                         // Alt+Tab: rotar foco entre clientes
-                if (p and ev.code == 67) { // F9 focus cycle
+                // Super+Return: abrir foot
+            if (input.mods.super and p and ev.code == 28) { // Super+Return
+                const pid = linux.fork();
+                if (pid == 0) {
+                    const argv = [_:null]?[*:0]const u8{ "/usr/bin/foot", null };
+                    const env = [_:null]?[*:0]const u8{
+                        "WAYLAND_DISPLAY=wayland-0",
+                        "XDG_RUNTIME_DIR=/run/user/1000",
+                        "HOME=/home/johan",
+                        null,
+                    };
+                    _ = linux.execve("/usr/bin/foot", &argv, &env);
+                    linux.exit(1);
+                }
+                continue;
+            }
+            if (p and ev.code == 67) { // F9 focus cycle
                     if (wl_server) |*srv2| {
                         const old_fd = srv2.focused_fd;
                         var found = false;
