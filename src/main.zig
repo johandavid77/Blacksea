@@ -228,22 +228,6 @@ pub fn main() !void {
                     if (p) {
                         if (input.mods.ctrl and ev.code == evdev.KEY_Q)     { running = false; break; }
                         // Alt+Tab: rotar foco entre clientes
-                // Super+Return: abrir foot
-            if (input.mods.super and p and ev.code == 28) { // Super+Return
-                const pid = linux.fork();
-                if (pid == 0) {
-                    const argv = [_:null]?[*:0]const u8{ "/usr/bin/foot", null };
-                    const env = [_:null]?[*:0]const u8{
-                        "WAYLAND_DISPLAY=wayland-0",
-                        "XDG_RUNTIME_DIR=/run/user/1000",
-                        "HOME=/home/johan",
-                        null,
-                    };
-                    _ = linux.execve("/usr/bin/foot", &argv, &env);
-                    linux.exit(1);
-                }
-                continue;
-            }
             if (p and ev.code == 67) { // F9 focus cycle
                     if (wl_server) |*srv2| {
                         const old_fd = srv2.focused_fd;
@@ -298,6 +282,26 @@ pub fn main() !void {
                 continue;
                 }
                         if (ev.code == evdev.KEY_F1) { mode = mode.toggle(); dirty = true; }
+                    // Super+Return: abrir foot
+                if (p and input.mods.ctrl and ev.code == 60) { // Ctrl+F2 spawn foot
+                    std.log.info("SPAWN! super={} p={} code={}", .{input.mods.super, p, ev.code});
+                    const rc = linux.fork();
+                    if (rc == 0) {
+                        _ = linux.setsid();
+                        const argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", "foot", null };
+                        const env = [_:null]?[*:0]const u8{
+                            "WAYLAND_DISPLAY=wayland-0",
+                            "XDG_RUNTIME_DIR=/run/user/1000",
+                            "HOME=/home/johan",
+                            "TERM=foot",
+                            null,
+                        };
+                        _ = linux.execve("/bin/sh", &argv, &env);
+                        linux.exit(1);
+                    }
+                    std.log.info("spawned foot pid={}", .{rc});
+                    continue;
+                }
                     }
                 // Reenviar tecla al cliente Wayland activo
                 if (wl_server) |*srv| {

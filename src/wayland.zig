@@ -659,15 +659,17 @@ pub const Server = struct {
                         // Solo ventanas toplevel reciben foco
                 if (client.keyboard_id > 0 and !client.keyboard_given and
                 surf.xdg_toplevel_id > 0) {
-                if (self.focused_fd == -1) self.focused_fd = client.fd;
-                client.keyboard_given = true;
-                self.serial += 1;
-                if (client.keyboard_id > 0 and client.last_wl_surface_id > 0) {
-                    self.serial += 1;
-                    seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, surf.id, self.serial);
-                    client.has_keyboard_focus = true;
-                }
-                seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
+                    client.keyboard_given = true;
+                    if (self.focused_fd == -1) {
+                        self.focused_fd = client.fd;
+                        self.serial += 1;
+                        if (client.last_wl_surface_id > 0) {
+                            self.serial += 1;
+                            seat_mod.sendKeyboardEnter(client.fd, client.keyboard_id, surf.id, self.serial);
+                            client.has_keyboard_focus = true;
+                        }
+                        seat_mod.sendModifiers(client.fd, client.keyboard_id, self.serial, 0, 0, 0, 0);
+                    }
                 }
             }
                 },
