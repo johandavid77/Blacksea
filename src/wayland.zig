@@ -80,7 +80,7 @@ pub const Client = struct {
             const rc = linux.sendto(@intCast(self.fd), data[sent..].ptr,
                 data.len - sent, linux.MSG.NOSIGNAL, null, 0);
             const n: isize = @bitCast(rc);
-            if (n < 0) { return; } // EAGAIN — ignorar
+            if (n < 0) { _ = linux.nanosleep(&.{ .sec = 0, .nsec = 100_000 }, null); continue; } // EAGAIN — reintentar
             if (n == 0) { self.dead = true; return; } // EOF real
             sent += @intCast(n);
         }
@@ -642,7 +642,11 @@ pub const Server = struct {
                         // Liberar buffer anterior si existe
                         if (surf.buffer) |old_buf| {
                             if (old_buf != pb) {
+                                if (old_buf.id == client.prev_buf_id) { } else {
+                                std.log.info("wl_buffer release id={}", .{old_buf.id});
                                 client.sendEvent(old_buf.id, 0, &[_]u8{});
+                                client.prev_buf_id = old_buf.id;
+                                }
 
 
                             }
