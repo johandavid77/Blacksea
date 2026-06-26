@@ -229,7 +229,7 @@ pub fn main() !void {
                     if (p) {
                         if (input.mods.ctrl and ev.code == evdev.KEY_Q)     { running = false; break; }
                         // Alt+Tab: rotar foco entre clientes
-            if (p and ev.code == 67) { // F9 focus cycle
+            if (p and (ev.code == 67 or (input.mods.alt and ev.code == 15))) { // F9 o Alt+Tab focus cycle
                     if (wl_server) |*srv2| {
                         const old_fd = srv2.focused_fd;
                         var found = false;
@@ -284,7 +284,7 @@ pub fn main() !void {
                 }
                         if (ev.code == evdev.KEY_F1) { mode = mode.toggle(); dirty = true; }
                     // Super+Return: abrir foot
-                if (p and (ev.code == 68 or (ev.code == 28 and input.mods.super))) { // F10 o Super+Enter spawn foot
+                if (p and (ev.code == 68 or (ev.code == 28 and input.mods.alt))) { // F10 o Alt+Enter spawn foot
                     std.log.info("SPAWN! super={} p={} code={}", .{input.mods.super, p, ev.code});
                     const rc = linux.fork();
                     if (rc == 0) {
@@ -321,6 +321,9 @@ pub fn main() !void {
                                 const abs_ms: u64 = @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / 1_000_000;
                                 const now_ms: u32 = @truncate(abs_ms - g_start_ms);
                                 std.log.info("KEY fd={} kid={} code={} state={}", .{cl.fd, cl.keyboard_id, ev.code, key_state});
+                    // Interceptar Alt+Enter — spawn foot, no enviar al cliente
+                    if (input.mods.alt and ev.code == 28 and key_state == 1) { _ = linux.fork(); continue; }
+                    if (input.mods.alt and ev.code == 28) continue; // Alt+Enter — interceptado para spawn
                     seat_mod.sendKey(cl.fd, cl.keyboard_id, srv.serial, now_ms, ev.code, key_state); // evdev+8 = XKB keycode
                                 dirty = true;
                                 break;
