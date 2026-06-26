@@ -284,7 +284,7 @@ pub fn main() !void {
                 }
                         if (ev.code == evdev.KEY_F1) { mode = mode.toggle(); dirty = true; }
                     // Super+Return: abrir foot
-                if (p and ev.code == 68) { // F10 spawn foot
+                if (p and (ev.code == 68 or (ev.code == 28 and input.mods.super))) { // F10 o Super+Enter spawn foot
                     std.log.info("SPAWN! super={} p={} code={}", .{input.mods.super, p, ev.code});
                     const rc = linux.fork();
                     if (rc == 0) {
