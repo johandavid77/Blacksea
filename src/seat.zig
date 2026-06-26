@@ -127,7 +127,7 @@ pub fn sendKey(fd: i32, keyboard_id: u32, serial: u32, time: u32, key: u32, stat
     var p: [16]u8 = undefined;
     writeU32(&p, 0, serial);
     writeU32(&p, 4, time);
-    writeU32(&p, 8, key);
+    writeU32(&p, 8, key); // sin offset — keymap ya lo maneja
     writeU32(&p, 12, state);
     sendEvent(fd, keyboard_id, WL_KEYBOARD_KEY, &p);
 }

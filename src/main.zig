@@ -69,6 +69,7 @@ pub fn main() !void {
         bsLog(.warn, "wayland socket falló: {}", .{err});
         break :blk null;
     };
+    if (wl_server) |*s| { s.screen_w = output.width; s.screen_h = output.height; }
     defer if (wl_server) |*s| s.deinit();
 
     drawFrame(output, .scrolling, output.width / 2, output.height / 2);
@@ -283,7 +284,7 @@ pub fn main() !void {
                 }
                         if (ev.code == evdev.KEY_F1) { mode = mode.toggle(); dirty = true; }
                     // Super+Return: abrir foot
-                if (p and input.mods.ctrl and ev.code == 60) { // Ctrl+F2 spawn foot
+                if (p and ev.code == 68) { // F10 spawn foot
                     std.log.info("SPAWN! super={} p={} code={}", .{input.mods.super, p, ev.code});
                     const rc = linux.fork();
                     if (rc == 0) {

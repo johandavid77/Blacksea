@@ -296,16 +296,9 @@ pub const Output = struct {
     pub fn drawBuffer(self: *Output) *Framebuffer { return &self.fb; }
 
     pub fn pageFlip(self: *Output, _: i32) !void {
-        var conn_id = self.connector_id;
-        var crtc = DrmModeCrtc{
-            .crtc_id            = self.crtc_id,
-            .fb_id              = self.fb_id,
-            .mode               = self.mode,
-            .mode_valid         = 1,
-            .count_connectors   = 1,
-            .set_connectors_ptr = @intFromPtr(&conn_id),
-        };
-        drm_ioctl(self.fd, DRM_IOCTL_MODE_SETCRTC, &crtc) catch {};
+        // virtio-gpu: DIRTYFB notifica al host que el framebuffer cambió
+        var dirty = DrmModeDirtyFb{ .fb_id = self.fb_id, .flags = 0, .color = 0, .num_clips = 0, .clips_ptr = 0 };
+        drm_ioctl(self.fd, DRM_IOCTL_MODE_DIRTYFB, &dirty) catch {};
     }
 
 };
@@ -413,6 +406,17 @@ pub const Device = struct {
             .{ .TYPE = .SHARED }, fd, @intCast(map.offset));
         const pixels = @as([*]u32, @ptrCast(@alignCast(ptr.ptr)))[0..size/4];
 
+        // 7b. Segundo dumb buffer para double buffering
+        var dumb2 = DrmModeCreateDumb{ .width = width, .height = height, .bpp = 32 };
+        try drm_ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &dumb2);
+        var fb_cmd2 = DrmModeFbCmd{ .width = width, .height = height, .pitch = dumb2.pitch, .bpp = 32, .depth = 24, .handle = dumb2.handle };
+        try drm_ioctl(fd, DRM_IOCTL_MODE_ADDFB, &fb_cmd2);
+        var map2 = DrmModeMapDumb{ .handle = dumb2.handle };
+        try drm_ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map2);
+        const size2: usize = @intCast(dumb2.size);
+        const ptr2 = try std.posix.mmap(null, size2, std.posix.PROT{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, fd, @intCast(map2.offset));
+        const pixels2 = @as([*]u32, @ptrCast(@alignCast(ptr2.ptr)))[0..size2/4];
+        std.log.info("drm: fb_id_back={}", .{fb_cmd2.fb_id});
         // 7. SET_CRTC
         var set_crtc = DrmModeCrtc{
             .crtc_id            = crtc_id,
@@ -433,7 +437,10 @@ pub const Device = struct {
             .crtc_id      = crtc_id,
             .connector_id = conn_id,
             .fb_id        = fb_cmd.fb_id,
+            .fb_id_back   = fb_cmd2.fb_id,
             .dumb_handle  = dumb.handle,
+            .dumb_handle_back = dumb2.handle,
+            .back_data    = pixels2,
             .mode         = mode,
             .fb = Framebuffer{
                 .width  = width,

@@ -80,7 +80,8 @@ pub const Client = struct {
             const rc = linux.sendto(@intCast(self.fd), data[sent..].ptr,
                 data.len - sent, linux.MSG.NOSIGNAL, null, 0);
             const n: isize = @bitCast(rc);
-            if (n <= 0) { self.dead = true; return; }
+            if (n < 0) { return; } // EAGAIN — ignorar
+            if (n == 0) { self.dead = true; return; } // EOF real
             sent += @intCast(n);
         }
     }
@@ -107,8 +108,7 @@ pub const Client = struct {
                 .control = null, .controllen = 0, .flags = 0,
             };
             const rc = linux.sendmsg(@intCast(self.fd), @ptrCast(&msg), linux.MSG.NOSIGNAL);
-            const n: isize = @bitCast(rc);
-            if (n < 0) self.dead = true;
+            _ = rc;
         }
     }
 
@@ -135,6 +135,8 @@ pub const Server = struct {
     allocator: std.mem.Allocator,
     serial   : u32 = 1,
     focused_fd: i32 = -1,
+    screen_w: u32 = 1280,
+    screen_h: u32 = 720,
 
     pub fn init(allocator: std.mem.Allocator) !Server {
         _ = linux.mkdir("/run/user/1000", 0o755);
@@ -275,7 +277,8 @@ pub const Server = struct {
                 }
             }
             const bytes: isize = @bitCast(n);
-            if (client.dead or bytes < 0) {
+            if (bytes < 0) { continue; } // EAGAIN o error temporal
+            if (client.dead) {
                 _ = linux.close(@intCast(client.fd));
                 slot.* = null;
                 continue;
