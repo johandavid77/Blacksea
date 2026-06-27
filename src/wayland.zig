@@ -80,7 +80,7 @@ pub const Client = struct {
             const rc = linux.sendto(@intCast(self.fd), data[sent..].ptr,
                 data.len - sent, linux.MSG.NOSIGNAL, null, 0);
             const n: isize = @bitCast(rc);
-            if (n < 0) { _ = linux.nanosleep(&.{ .sec = 0, .nsec = 100_000 }, null); continue; } // EAGAIN — reintentar
+            if (n < 0) { break; } // EAGAIN — skip, no bloquear
             if (n == 0) { self.dead = true; return; } // EOF real
             sent += @intCast(n);
         }
