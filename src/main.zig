@@ -304,6 +304,7 @@ pub fn main() !void {
                         _ = linux.execve("/bin/sh", &argv, &env);
                         linux.exit(1);
                     }
+                if (ev.code == 28 and input.mods.alt) continue; // no enviar Alt+Enter al cliente
                     std.log.info("spawned foot pid={}", .{rc});
                     continue;
                 }
@@ -326,8 +327,6 @@ pub fn main() !void {
                                 const now_ms: u32 = @truncate(abs_ms - g_start_ms);
                                 std.log.info("KEY fd={} kid={} code={} state={}", .{cl.fd, cl.keyboard_id, ev.code, key_state});
                     // Interceptar Alt+Enter — spawn foot, no enviar al cliente
-                    if (input.mods.alt and ev.code == 28 and key_state == 1) { _ = linux.fork(); continue; }
-                    if (input.mods.alt and ev.code == 28) continue; // Alt+Enter — interceptado para spawn
                     seat_mod.sendKey(cl.fd, cl.keyboard_id, srv.serial, now_ms, ev.code, key_state); // evdev+8 = XKB keycode
                                 dirty = true;
                                 break;
