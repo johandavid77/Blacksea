@@ -289,7 +289,11 @@ pub fn main() !void {
                     const rc = linux.fork();
                     if (rc == 0) {
                         _ = linux.setsid();
-                        const argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", "foot", null };
+                        const term_cmd: [*:0]const u8 = if (cfg.terminal_cmd[0] != 0)
+                            @as([*:0]const u8, @ptrCast(&cfg.terminal_cmd))
+                        else
+                            "foot";
+                        const argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", term_cmd, null };
                         const env = [_:null]?[*:0]const u8{
                             "WAYLAND_DISPLAY=wayland-0",
                             "XDG_RUNTIME_DIR=/run/user/1000",

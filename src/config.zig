@@ -20,6 +20,7 @@ pub const Config = struct {
     gap:           u32  = 8,
     mod_key:       []const u8 = "super",
     wallpaper_path: [256]u8 = [_]u8{0} ** 256,
+    terminal_cmd: [256]u8 = [_]u8{0} ** 256,
 
     pub fn load(self: *Config, path: []const u8) !void {
         const L = c.luaL_newstate() orelse return error.LuaInit;
@@ -65,6 +66,16 @@ pub const Config = struct {
             const copy_len = @min(slen, 255);
             @memcpy(self.wallpaper_path[0..copy_len], s[0..copy_len]);
             self.wallpaper_path[copy_len] = 0;
+            // terminal_cmd
+            _ = bs_lua_getglobal(L, "terminal");
+            if (bs_lua_isstring2(L, -1) != 0) {
+                var tlen: usize = 0;
+                const ts = bs_lua_tostring(L, -1, &tlen);
+                const tcopy_len = @min(tlen, 255);
+                if (ts) |ts_ptr| @memcpy(self.terminal_cmd[0..tcopy_len], ts_ptr[0..tcopy_len]);
+                self.terminal_cmd[tcopy_len] = 0;
+            }
+            bs_lua_pop(L, 1);
         }
         bs_lua_pop(L, 1);
         std.log.info("config: border={} gap={}", .{self.border_width, self.gap});
